@@ -203,6 +203,7 @@ export function errorPayload(error) {
         : code === 'UNSUPPORTED_PARAMETER' && param ? `UNSUPPORTED_PARAMETER: ${param}`
         : code === 'UNSUPPORTED_MODEL' ? 'UNSUPPORTED_MODEL: supported models are gemini-neon, gemini-hydrogen, gemini-flash-lite (alias: gemini-argon -> gemini-neon)'
         : code === 'NATIVE_UPSTREAM_UNAVAILABLE' ? 'NATIVE_UPSTREAM_UNAVAILABLE: upstream Google service temporarily unavailable (HTTP 503 / gRPC UNAVAILABLE)'
+        : code === 'SERVER_SHUTDOWN' ? 'SERVER_SHUTDOWN: gateway is restarting; retry the request'
         : code,
       type:
         terminal ? "server_error" : error?.status === 401
@@ -418,10 +419,23 @@ export function createGateway({
       throw fault("PROMPT_SIZE_LIMIT", 413);
     if (active >= settings.maxConcurrent) throw fault("GATEWAY_BUSY", 429);
     const outputStreaming = !playground && body.stream === true;
+    let hardDestroyTimer = null;
     const controller = new AbortController(),
       timer = setTimeout(() => {
         controller.abort(fault('REQUEST_DEADLINE', 504));
-        if (res.headersSent && !res.destroyed && !res.writableEnded) res.destroy?.();
+        if (res.headersSent && !res.destroyed && !res.writableEnded) {
+          // Give delivery.interrupt() a short window to flush a clean SSE termination
+          // frame (e.g. finish_reason: "tool_calls" + [DONE]); destroy immediately only
+          // if the client socket is already backpressured, or after a 2s fallback.
+          if (res.writableNeedDrain) {
+            res.destroy?.();
+          } else {
+            hardDestroyTimer = setTimeout(() => {
+              if (!res.destroyed && !res.writableEnded) res.destroy?.();
+            }, 2000);
+            hardDestroyTimer.unref?.();
+          }
+        }
       }, settings.timeoutMs + 1000);
     timer.unref();
     controllers.add(controller);
@@ -496,7 +510,7 @@ export function createGateway({
           // Only content the caller actually received commits this turn. A held
           // tiny prefix is still replaceable by one retry.
           error.responseStarted = res.headersSent === true || delivery.publishedBytes > 0 || delivery.callCount > 0 || res.destroyed === true;
-          if (!error.responseStarted && !error.unverifiedOutput && delivery.retryableShortfall) error.shortOutput = true;
+          if (!error.responseStarted && !error.unverifiedOutput && !error.postOutputIdleStall && delivery.retryableShortfall) error.shortOutput = true;
           const evidence = safeNativeEvidence(error.nativeEvidence);
           const failure = { accountId: acc, status: Number.isInteger(error.status) && error.status >= 400 && error.status <= 599 ? error.status : 502,
             code: errorPayload(error).error.code, ...(evidence ? { nativeEvidence: evidence } : {}) };
@@ -540,6 +554,9 @@ export function createGateway({
     } catch (error) {
       if (controller.signal.reason?.code === 'REQUEST_DEADLINE') {
         error = Object.assign(fault('NATIVE_TURN_TIMEOUT', 504), { nativeEvidence: error.nativeEvidence });
+      } else if (controller.signal.reason?.code === 'SERVER_SHUTDOWN') {
+        error = Object.assign(fault('SERVER_SHUTDOWN', 503), { nativeEvidence: error.nativeEvidence });
+        if (!res.headersSent) res.setHeader('Retry-After', '2');
       }
       status =
         Number.isInteger(error.status) &&
@@ -594,6 +611,7 @@ export function createGateway({
       }
       controllers.delete(controller);
       clearTimeout(timer);
+      if (hardDestroyTimer !== null) clearTimeout(hardDestroyTimer);
       req.off("aborted", disconnect);
       res.off("close", disconnect);
       requests.unshift({
@@ -1165,7 +1183,7 @@ export function createGateway({
     },
     async close() {
       closing = true;
-      for (const c of controllers) c.abort(fault('SERVER_SHUTDOWN', 499));
+      for (const c of controllers) c.abort(fault('SERVER_SHUTDOWN', 503));
       resumption.close();
       await quotaRefreshJobs.close();
       const accountsDrain = Promise.resolve(accounts.close());

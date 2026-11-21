@@ -9,7 +9,7 @@ import { plainObject, protocolError, parseBoundedJson, compileToolPolicy, valida
 import { stripSchemaAnnotations } from './prompt-tool-schema.mjs';
 import { normalizeChatResponseFormat, normalizeResponsesText, buildStructuredOutputInstruction } from './gateway/structured-output.mjs';
 import { isSafeWebUrl } from './gateway/native-search-metadata.mjs';
-import { MAX_IMAGES, MAX_IMAGE_URL_BYTES, normalizeImageUrl, collectImageInputs } from './image-input.mjs';
+import { MAX_IMAGES, MAX_IMAGE_URL_BYTES, MAX_TOTAL_IMAGE_URL_BYTES, normalizeImageUrl, collectImageInputs } from './image-input.mjs';
 import { RESPONSE_TOOL_IDENTITIES, normalizeResponsesTools, responsesCallFields } from './responses-tool-namespaces.mjs';
 import { toResponsesUsage } from './openai-usage.mjs';
 
@@ -83,8 +83,11 @@ function requestBudget(root) {
   const visit = (value, depth, image = false) => {
     if (++nodes > 32768 || depth > 32) fail('REQUEST_TOO_LARGE', 413);
     if (typeof value === 'string') {
-      if (image) imageBytes += Buffer.byteLength(value);
-      else bytes += Buffer.byteLength(value);
+      if (image) {
+        const len = Buffer.byteLength(value);
+        if (len > MAX_IMAGE_URL_BYTES) fail('IMAGE_TOO_LARGE', 413);
+        imageBytes += len;
+      } else bytes += Buffer.byteLength(value);
     }
     else if (value === null || value === undefined || typeof value === 'boolean') bytes += 4;
     else if (typeof value === 'number' && Number.isFinite(value)) bytes += 8;
@@ -105,7 +108,7 @@ function requestBudget(root) {
       }
       ancestors.delete(value);
     }
-    if (bytes > REQUEST_MAX_NON_IMAGE_BYTES || imageBytes > MAX_IMAGE_URL_BYTES) fail('REQUEST_TOO_LARGE', 413);
+    if (bytes > REQUEST_MAX_NON_IMAGE_BYTES || imageBytes > MAX_TOTAL_IMAGE_URL_BYTES) fail('REQUEST_TOO_LARGE', 413);
   };
   visit(root, 0);
 }
@@ -335,7 +338,7 @@ export function normalizeChatRequest(payload, { allowAutoModel = false } = {}) {
   if (!Array.isArray(payload.messages) || !payload.messages.length || payload.messages.length > MAX_MESSAGES) fail('MESSAGES_REQUIRED');
   const pending = new Set(), seen = new Set();
   const messages = payload.messages.map(message => {
-    keys(message, ['role', 'content', 'name', 'tool_calls', 'tool_call_id', 'refusal', 'parsed', 'annotations'], 'messages');
+    keys(message, ['role', 'content', 'name', 'tool_calls', 'tool_call_id', 'refusal', 'parsed', 'annotations', 'reasoning_content', 'reasoning'], 'messages');
     const role = message.role;
     if (!['system', 'developer', 'user', 'assistant', 'tool'].includes(role)) fail('UNSUPPORTED_ROLE');
     if (message.name !== undefined && message.name !== null) {
@@ -346,6 +349,17 @@ export function normalizeChatRequest(payload, { allowAutoModel = false } = {}) {
     // SDK stream accumulators attach null parsing/refusal metadata on replay.
     // Only inert null is accepted; structured/refusal content is unsupported.
     for (const key of ['refusal', 'parsed']) if (message[key] !== undefined && (role !== 'assistant' || message[key] !== null)) fail('UNSUPPORTED_PARAMETER', 400, `messages.${key}`);
+    // OpenAI-compatible reasoning clients (OpenClaw, DeepSeek/LiteLLM, Pi) replay
+    // assistant reasoning_content/reasoning strings or null on historical turns.
+    // Validate UTF-8/bounds and strip before canonical prompt construction.
+    for (const key of ['reasoning_content', 'reasoning']) {
+      if (message[key] !== undefined) {
+        if (role !== 'assistant' || (message[key] !== null && typeof message[key] !== 'string')) {
+          fail('UNSUPPORTED_PARAMETER', 400, `messages.${key}`);
+        }
+        if (typeof message[key] === 'string') text(message[key]);
+      }
+    }
     if (message.annotations !== undefined) {
       if (role !== 'assistant') fail('UNSUPPORTED_ANNOTATIONS');
       validateReplayAnnotations(message.annotations, { chat: true });

@@ -2,6 +2,39 @@
 
 Release notes for Gemini App2API.
 
+## 1.6.3 — 2026-11-20
+
+### Clean short-reply stall recovery, tighter idle watchdogs & safe deliverable-output gating (`pi-gemini-app@0.1.8`, `openclaw-gemini-app@0.1.4`)
+- Fixed short (`< 2,048 B`) verified plain-text replies that stall upstream without `completed: true` / `END_STREAM` (`src/native-provider.mjs`, `src/gateway/app.mjs`, `src/gateway/response-delivery.mjs`, `extensions/pi/stream.js`): once all output validations pass (verified mode/attribution, no unclosed `tool_call` fence, tool choice satisfied, no soft-error/refusal, valid structured JSON), the gateway flushes the reply with `finish_reason: "stop"`, `incomplete: true`, and `data: [DONE]` on attempt 1 (eliminating `shortOutputRetry` and client 300s headers-timeout retry loops), and standalone `pi-gemini-app@0.1.8` / `openclaw-gemini-app@0.1.4` finish cleanly with `done` (`stop` / `toolUse`).
+- Tightened upstream idle watchdogs in `src/native-provider.mjs` to **`2s`** (`postCompleteGraceMs`), **`6s`** (`postToolIdleMs`), and **`15s`** (`postOutputIdleMs`), and strictly gated all watchdogs so they **only arm when verified, complete, deliverable output already exists** — preventing premature `504 -> 422 GENERATION_FAILED` aborts during slow mid-`tool_call`, mid-JSON, or prefill pauses.
+- Added npm publish helper scripts (`publish:pi`, `publish:openclaw:npm`, `publish:openclaw:clawhub`, `publish:openclaw`, `publish:extensions`) to `package.json`.
+
+## 1.6.2 — 2026-11-20
+
+### Long-context streaming resilience, upstream idle watchdogs & OpenClaw `reasoning_content` compatibility
+- Added periodic `15s` SSE `: keepalive\n\n` comments in `src/gateway/response-delivery.mjs` (fanned out live via `SharedResponse.writeKeepalive` in `src/gateway/request-resumption.mjs` without polluting replay buffers) so long prefill/thinking turns do not trip Node.js `undici`'s 300-second `bodyTimeout` (`TypeError: terminated`).
+- Removed premature `res.destroy?.()` on `REQUEST_DEADLINE` in `src/gateway/app.mjs`, giving `delivery.interrupt()` a 2-second grace window on healthy sockets to flush `finish_reason: "tool_calls"` / `"stop"`, `incomplete: true`, and `data: [DONE]` cleanly.
+- Added immediate upstream cancellation on post-tool `[Caller tool result]` hallucination (`liveSplitter.suppressed` in `src/tool-protocol.mjs` and `src/native-provider.mjs`) so Pi, OpenClaw, and Gateway clients execute emitted tool calls immediately instead of waiting for discarded hallucinated text.
+- Added bounded post-complete and post-output upstream idle watchdogs in `src/native-provider.mjs` (shared across Gateway, `pi-gemini-app@0.1.7`, and `openclaw-gemini-app@0.1.3`): `postCompleteGraceMs` (`8s`, cleanly completes verified turns when upstream omits `END_STREAM`), `postToolIdleMs` (`15s`, flushes committed tool calls when upstream stalls), and `postOutputIdleMs` (`45s`, gated on already-committed `>= 2,048 B` output so prefill silence and short `< 2,048 B` replies never trigger false `NATIVE_TURN_TIMEOUT` retry loops).
+- Accepted and stripped optional `reasoning_content` and `reasoning` (`string | null`) fields on replayed `assistant` messages in `src/openai-contract.mjs`, fixing `400 UNSUPPORTED_PARAMETER: messages.reasoning_content` errors from OpenClaw and OpenAI-compatible reasoning clients.
+- Streamlined `README.md` and `README.zh.md` for faster 30-second onboarding and `v1.6.x` parity.
+
+## 1.6.1 — 2026-11-20
+
+### Multi-image E2E pipeline: lifted artificial 4-image / 2 MiB caps, parallel HTTP/2 uploads & per-account in-memory `blobId` cache
+- Lifted the arbitrary `4`-image and `2 MiB` total image caps across the Gateway (`src/image-input.mjs`, `src/openai-contract.mjs`, `src/gateway/image-upload.mjs`, `native-wire/robin-current.mjs`), `pi-gemini-app@0.1.6`, and `openclaw-gemini-app@0.1.2` (`extensions/pi/transcript.js`) to DoS safety bounds of **`256` images**, **`20 MiB` per image**, and **`256 MiB` combined decoded bytes**, after live Robin probes confirmed multi-image (`32+` images) and `10 MiB+` single-image processing. Non-image prompt text/JSON remains strictly bounded at `4 MiB`.
+- Raised default HTTP JSON `maxBodyBytes` from `4 MiB` to **`128 MiB`** (max `256 MiB`) in `src/gateway/state.mjs`, with automatic in-memory upgrade of untouched legacy `4 MiB` defaults on restart while preserving any explicit custom `maxBodyBytes` override.
+- Upgraded `uploadNativeImages` (`src/gateway/image-upload.mjs`) to multiplex concurrent HTTP/2 uploads (`concurrency = 8`, preserving exact input attachment order) with upload timeouts scaled to the request deadline (up to `180s` per turn / `600s` max).
+- Added a lightweight, strictly isolated ephemeral in-memory `ImageBlobCache` (`(accountId, tokenFingerprint, mimeType, sha256) -> blobId`, `15 min` TTL, max `2,048` entries, never storing image bytes or persisting to disk) in `src/native-provider.mjs` and `extensions/pi/stream.js`, eliminating redundant historical screenshot re-uploads across multi-turn E2E sessions while transparently evicting and re-uploading once if an upstream cached `blobId` expires before frames arrive.
+
+## 1.6.0 — 2026-11-20
+
+### Standalone zero-dependency OpenClaw provider plugin (`openclaw-gemini-app`) & retryable `503 SERVER_SHUTDOWN` restarts
+- Added a standalone zero-dependency native HTTP/2 provider plugin for **OpenClaw** (`extensions/openclaw/`, published as [`openclaw-gemini-app@0.1.1`](https://www.npmjs.com/package/openclaw-gemini-app)) with manifest-first `openclaw.plugin.json` (`gemini-app` provider, 512k `gemini-neon` / `gemini-hydrogen` and 128k `gemini-flash-lite` / `gemini-auto`, `gemini-argon` alias normalization, Free-tier model filtering), local browser & remote VPS OAuth login with automatic ToS acceptance and `refreshOAuth`, OpenClaw `requestAuth` v1 fresh token resolution with `assertCurrent()`, `/usage` quota snapshot integration + `/gemini-quota` command, failover & context-overflow classifiers, and full parity with the gateway's `15s` HTTP/2 `PING` keepalives, `HTTPS_PROXY` tunneling, and 256-tool support.
+- Added a deterministic OpenClaw package builder (`scripts/build-openclaw-package.mjs`), release verifier (`scripts/check-openclaw-package.mjs`, integrated into `npm run test:release`), and offline test suite (`test/openclaw-extension.test.mjs`, `test/openclaw-package-build.test.mjs`), verified with zero breakages/issues by `@openclaw/plugin-inspector` against `openclaw@2026.11.6` and `clawhub package publish --dry-run`; decoupled `src/gateway/oauth-identity.mjs` from `src/gateway/state.mjs` to eliminate `child_process` from the plugin closure.
+- Fixed in-flight gateway generation requests interrupted by server shutdown/restart (`src/gateway/app.mjs`) to return a standard retryable **`HTTP 503`** (`code: "SERVER_SHUTDOWN"`, `type: "server_error"`, `Retry-After: 2`) instead of non-retryable `499 invalid_request_error / NATIVE_TURN_ABORTED`, with regression coverage in `test/gateway-http.test.mjs`.
+- Added native extension showcase banners (`docs/assets/openclaw-extension.jpg`, `docs/assets/extensions-overview.jpg`) and `openclaw-gemini-app` npm badges across `README.md`, `README.zh.md`, and `extensions/openclaw/README.md`.
+
 ## 1.5.3 — 2026-11-20
 
 ### Transport resilience (HTTP/2 PING keepalive, `HTTPS_PROXY` support, single-account recovery) & Admin UI v2 visual refresh

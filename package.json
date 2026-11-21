@@ -1,6 +1,6 @@
 {
   "name": "gemini-app2api",
-  "version": "1.5.3",
+  "version": "1.6.3",
   "description": "Zero-dependency native Gemini HTTP/2 gateway & in-process Pi extension (pi-gemini-app) with OpenAI compatibility, caller-validated tools, multi-account pooling, and operations console.",
   "private": true,
   "repository": {
@@ -89,7 +89,14 @@
     "test:browser": "playwright test --config test/browser/playwright.config.mjs",
     "build:pi-package": "node scripts/build-pi-package.mjs",
     "test:pi-package": "node scripts/check-pi-package.mjs",
-    "test:release": "node scripts/check-release.mjs && node scripts/check-pi-package.mjs",
+    "publish:pi": "node scripts/build-pi-package.mjs --clean --out .pi-package-build/package && npm publish .pi-package-build/package --access public",
+    "build:openclaw-package": "node scripts/build-openclaw-package.mjs",
+    "test:openclaw-package": "node scripts/check-openclaw-package.mjs",
+    "publish:openclaw:npm": "node scripts/build-openclaw-package.mjs --clean --out .openclaw-package-build/package && npm publish .openclaw-package-build/package --access public",
+    "publish:openclaw:clawhub": "node scripts/build-openclaw-package.mjs --clean --out .openclaw-package-build/package && npx --yes clawhub package publish .openclaw-package-build/package",
+    "publish:openclaw": "npm run publish:openclaw:npm && npm run publish:openclaw:clawhub",
+    "publish:extensions": "npm run publish:pi && npm run publish:openclaw",
+    "test:release": "node scripts/check-release.mjs && node scripts/check-pi-package.mjs && node scripts/check-openclaw-package.mjs",
     "test:python": "node scripts/sdk-smoke.mjs",
     "test:docker": "node scripts/docker-smoke.mjs",
     "test:prerelease": "node scripts/verify-offline-product-runner.mjs && npm run test:current-contract && npm run test:product && npm run test:browser && npm run test:python && docker build -t gemini-app2api-smoke . && npm run test:docker && npm run test:release",
