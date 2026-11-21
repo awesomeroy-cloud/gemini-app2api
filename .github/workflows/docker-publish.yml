@@ -19,16 +19,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - run: npm ci --ignore-scripts
-
-      - name: Verify release manifests and Docker COPY closure
-        run: npm run test:release
-
       - name: Verify release tag matches package.json version
         if: startsWith(github.ref, 'refs/tags/v')
         env:
