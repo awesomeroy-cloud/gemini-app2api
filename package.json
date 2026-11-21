@@ -33,6 +33,7 @@
     "src/gateway/",
     "src/admin-v2/index.html",
     "src/admin-v2/app.js",
+    "src/admin-v2/i18n-zh-cn.js",
     "src/admin-v2/styles.css",
     "src/native-provider.mjs",
     "src/tool-protocol.mjs",

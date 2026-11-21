@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import { toZhCN } from '../src/admin-v2/i18n-zh-cn.js';
 
 const root = new URL('../src/admin-v2/', import.meta.url);
 const source = await readFile(new URL('app.js', root), 'utf8');
@@ -36,10 +37,11 @@ function fixture(demo = false, fetchImpl = () => { throw Error('Unexpected netwo
     location: { search: demo ? '?demo=1' : '', hash: '', href: `http://fixture.invalid/admin/${demo ? '?demo=1' : ''}`, origin: 'http://fixture.invalid', protocol: 'http:' },
     history: { replaceState(_state, _title, url) { const parsed = new URL(url, sandbox.location.href); sandbox.location.href = parsed.href; sandbox.location.search = parsed.search; sandbox.location.hash = parsed.hash; } },
     document: { hidden: false, activeElement: null, documentElement: { dataset: {} }, addEventListener() {}, getElementById: id => { if (!nodesById.has(id)) nodesById.set(id, new StubNode(id)); return nodesById.get(id); }, querySelector: () => null, querySelectorAll: () => [], createElement: () => new StubNode(), createElementNS: () => new StubNode(), createTextNode: text => { const s = String(text); createdTexts.push(s); return s; } },
-    window: { addEventListener() {} }, localStorage: { getItem: () => null, setItem() {} }, fetch: fetchImpl,
+    window: { addEventListener() {} }, localStorage: { getItem: () => null, setItem() {} }, fetch: fetchImpl, toZhCN,
   };
   const context = vm.createContext(sandbox);
-  vm.runInContext(source.replace(/\nboot\(\);\s*$/, '\n') + '\nglobalThis.subject = { api, requestMetadata, sanitizeDiagnostics, safeError, makeDemo, demoApi, setDemoScenario, syncDemoState, formatBytes, overviewModelTelemetry, accountModelTelemetryView, S, words, I18N, t, reasonLabel, modelStateLabel, accountCoolingDown, accountNeedsSignIn, accountRoutingEligible, accountRoutingLabel, accountAttentionReasons, accountHasAttention, poolCurrentWindowSummary, filteredAccounts, editableSettings, filteredRequests, addAccount, modelEvidence, localRoutingState, readableMilliseconds, quotaRowIdentity, applyRouteFromHash, openAccountDrawer, closeAccountDrawer, renderAccountDrawer, refresh, focusRouteTarget, copyApiKey, toggleRevealKey, revealedKeys, expireSession };', context, { timeout: 2000 });
+  const runnable = source.replace(/^import\s+\{[^}]*\}\s+from\s+['"][^'"]+['"];?\s*\n/m, '').replace(/\nboot\(\);\s*$/, '\n');
+  vm.runInContext(runnable + '\nglobalThis.subject = { api, requestMetadata, sanitizeDiagnostics, safeError, makeDemo, demoApi, setDemoScenario, syncDemoState, formatBytes, overviewModelTelemetry, accountModelTelemetryView, S, words, I18N, t, reasonLabel, modelStateLabel, accountCoolingDown, accountNeedsSignIn, accountRoutingEligible, accountRoutingLabel, accountAttentionReasons, accountHasAttention, poolCurrentWindowSummary, filteredAccounts, editableSettings, filteredRequests, addAccount, modelEvidence, localRoutingState, readableMilliseconds, quotaRowIdentity, applyRouteFromHash, openAccountDrawer, closeAccountDrawer, renderAccountDrawer, refresh, focusRouteTarget, copyApiKey, toggleRevealKey, revealedKeys, expireSession };', context, { timeout: 2000 });
   return { ...sandbox.subject, nodesById, createdTexts, location: sandbox.location };
 }
 const plain = value => JSON.parse(JSON.stringify(value));

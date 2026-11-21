@@ -16,12 +16,15 @@ import { RequestResumption } from './request-resumption.mjs';
 import { QuotaRefreshJobs } from './quota-refresh-jobs.mjs';
 import { NativeDiagnostic, observeNative } from './native-diagnostic.mjs';
 import { createResponseDelivery } from './response-delivery.mjs';
+import { AuditStore, extractClientIp } from './audit-store.mjs';
+import { estimateUsage } from '../openai-usage.mjs';
 const uiRoot = new URL("../admin-v2/", import.meta.url);
 const assets = new Map([
   ["/admin", "index.html"],
   ["/admin/", "index.html"],
   ["/admin/index.html", "index.html"],
   ["/admin/app.js", "app.js"],
+  ["/admin/i18n-zh-cn.js", "i18n-zh-cn.js"],
   ["/admin/styles.css", "styles.css"],
 ]);
 const sensitiveMethods = new Set(["POST", "PATCH", "DELETE", "PUT"]);
@@ -327,6 +330,7 @@ export function createGateway({
   const security = new Security(store, { secureCookies });
   const resumption = new RequestResumption({ maxEntries: Math.min(64, store.settings().maxSessions) });
   const nativeDiagnostic = new NativeDiagnostic(store.directory);
+  const auditStore = new AuditStore(store.directory);
   const effectiveSettings = () => ({
     ...store.settings(),
     ...(server.listening
@@ -445,6 +449,11 @@ export function createGateway({
       description = null,
       providerAttempts = 0;
     let outputIncomplete = false;
+    let firstByteAt = null;
+    let capturedReply = "";
+    let capturedToolCalls = [];
+    let capturedError = null;
+    let servedModel = "";
     const providerFailures = [];
     let diagnostic = null;
     res.setHeader("X-Request-ID", id);
@@ -476,7 +485,10 @@ export function createGateway({
           if (context.responseSessionId) res.setHeader('X-Session-ID', context.responseSessionId);
           if (context.failoverReason) res.setHeader("X-Gemini-Failover-Reason", context.failoverReason);
         }
-        try { return await provider.runTurn(acc, canonical, event => delivery.accept(event), { ...context, timeoutMs: settings.timeoutMs,
+        try { return await provider.runTurn(acc, canonical, event => {
+          if (firstByteAt === null && (event?.text || event?.delta || event?.calls?.length || event?.call)) firstByteAt = Date.now();
+          return delivery.accept(event);
+        }, { ...context, timeoutMs: settings.timeoutMs,
           incrementalOutput: true, outputMode: outputStreaming ? 'stream' : 'buffered',
           getOutputCommitState: delivery.outputCommitState,
           ...(attemptDiagnostic ? { nativeDiagnostic: attemptDiagnostic } : {}) }); }
@@ -502,6 +514,10 @@ export function createGateway({
         : await pool.run({ owner, sessionId: sid, signal: controller.signal, model: canonical.model }, turn);
       if (controller.signal.aborted) throw fault("REQUEST_CANCELLED", 499);
       const result = output.result;
+      if (firstByteAt === null) firstByteAt = Date.now();
+      capturedReply = typeof result.content === "string" ? result.content : "";
+      capturedToolCalls = Array.isArray(result.calls) ? result.calls : [];
+      servedModel = result.attribution || (Number.isSafeInteger(result.resolvedModeCategory) ? `mode:${result.resolvedModeCategory}` : "");
       nativeEvidence = safeNativeEvidence(result.nativeEvidence);
       try {
         accounts.recordProviderSuccess(accountId, canonical.model, result);
@@ -535,6 +551,9 @@ export function createGateway({
       previousRequestId = errorPayload(error).error.previous_request_id ?? null;
       // Report the actual failure. Retrying never requires a local allowance.
       nativeEvidence = safeNativeEvidence(error.nativeEvidence);
+      capturedError = { ...errorPayload(error).error, ...(nativeEvidence ? { nativeEvidence } : {}) };
+      if (!capturedReply && typeof error.partialResult?.content === "string") capturedReply = error.partialResult.content;
+      if (!capturedToolCalls.length && Array.isArray(error.partialResult?.calls)) capturedToolCalls = error.partialResult.calls;
       toolCalls = delivery.callCount;
       totalErrors++;
       // Internal attempts have finished. Do not turn an empty failed operation into
@@ -603,6 +622,61 @@ export function createGateway({
         ...(nativeEvidence ? { nativeEvidence } : {}),
       });
       requests.length = Math.min(200, requests.length);
+      try {
+        const totalMs = Date.now() - at;
+        const ttfbMs = firstByteAt !== null ? Math.max(0, firstByteAt - at) : totalMs;
+        const reqPath = accountTestId ? "/admin/api/accounts/test" : playground
+          ? "/admin/api/playground"
+          : `/v1/${route === "responses" ? "responses" : "chat/completions"}`;
+        const accountLabel = accountId ? (accounts.list().find((a) => a.id === accountId)?.label || accountId) : "";
+        const usage = estimateUsage({
+          promptChars: Number.isFinite(body.__promptChars) ? body.__promptChars : 0,
+          outputBytes: Buffer.byteLength(capturedReply, "utf8"),
+        });
+        const finishReason = status >= 400 ? "error" : outputIncomplete ? "incomplete" : capturedToolCalls.length ? "tool_calls" : "stop";
+        auditStore.record({
+          reqId: id,
+          ts: at,
+          clientIp: extractClientIp(req),
+          method: req.method || "POST",
+          path: reqPath,
+          model: canonical.model ?? "gemini-neon",
+          servedModel,
+          stream: outputStreaming,
+          status,
+          failed: status >= 400 || Boolean(errorCode),
+          ttfbMs,
+          totalMs,
+          promptTokens: usage.prompt_tokens,
+          outputTokens: usage.completion_tokens,
+          totalTokens: usage.total_tokens,
+          toolCallCount: toolCalls,
+          attempts: providerAttempts,
+          account: accountLabel,
+          keyFp: owner || "",
+          issue: errorCode || (outputIncomplete ? "incomplete" : ""),
+          finishReason,
+          userAgent: req.headers?.["user-agent"] || "",
+          requestBody: body,
+          reply: capturedReply,
+          toolCalls: capturedToolCalls,
+          error: capturedError || (nativeEvidence && status >= 400 ? { nativeEvidence } : null),
+          errorCode,
+          params: {
+            thinking_level: canonical.thinking_level,
+            reasoning_effort: canonical.reasoning_effort ?? canonical.reasoning?.effort ?? null,
+            native_search: Boolean(canonical.native_search),
+            stream: outputStreaming,
+            route,
+            sessionSource: identity.source,
+            providerAttempts,
+            ...(providerFailures.length ? { providerFailures } : {}),
+            ...(outputIncomplete ? { outputIncomplete: true } : {}),
+            ...(nativeResponseRevisions !== null ? { nativeResponseRevisions } : {}),
+          },
+          reqHeaders: req.headers,
+        });
+      } catch { /* Audit persistence must never fail or disrupt requests. */ }
       inFlightTasks.delete(inFlightPromise);
       resolveInFlight();
     }
@@ -718,7 +792,7 @@ export function createGateway({
           "Content-Type": filename.endsWith(".html")
             ? "text/html; charset=utf-8"
             : filename.endsWith(".js")
-              ? "text/javascript; charset=utf-8"
+              ? "application/javascript; charset=utf-8"
               : "text/css; charset=utf-8",
         });
         res.end(bytes);
@@ -954,6 +1028,38 @@ export function createGateway({
             liveVerification: "not_implied_by_health",
           });
         }
+        if (p === "/admin/api/audits" && req.method === "GET") {
+          if (url.searchParams.get("models") === "1") return json(res, auditStore.facets());
+          return json(res, auditStore.list({
+            q: url.searchParams.get("q") || "",
+            status: url.searchParams.get("status") || "",
+            issue: url.searchParams.get("issue") || "",
+            model: url.searchParams.get("model") || "",
+            account: url.searchParams.get("account") || "",
+            finish: url.searchParams.get("finish") || "",
+            tools: url.searchParams.get("tools") || "",
+            path: url.searchParams.get("path") || "",
+            limit: url.searchParams.get("limit") || "50",
+            before_id: url.searchParams.get("before_id") || "",
+            after_id: url.searchParams.get("after_id") || "",
+          }));
+        }
+        if (p === "/admin/api/audits" && req.method === "DELETE") {
+          const deleted = auditStore.clear();
+          auditEvent("audits.cleared", String(deleted));
+          return json(res, { ok: true, deleted });
+        }
+        const auditItem = p.match(/^\/admin\/api\/audits\/(\d+)$/);
+        if (auditItem && req.method === "GET") {
+          const record = auditStore.get(auditItem[1]);
+          if (!record) throw fault("AUDIT_NOT_FOUND", 404);
+          return json(res, record);
+        }
+        if (auditItem && req.method === "DELETE") {
+          if (!auditStore.remove(auditItem[1])) throw fault("AUDIT_NOT_FOUND", 404);
+          auditEvent("audit.deleted", auditItem[1]);
+          return json(res, { ok: true });
+        }
         if (p === "/admin/api/playground" && req.method === "POST") {
           const b = await readJson(req, store.settings().maxBodyBytes);
           if (req.aborted || res.destroyed) return;
@@ -1070,6 +1176,7 @@ export function createGateway({
         timer.unref();
       });
       await Promise.allSettled([accountsDrain, ...inFlightTasks]);
+      auditStore.close();
     },
   };
 }

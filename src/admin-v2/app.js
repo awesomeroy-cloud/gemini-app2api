@@ -3,19 +3,29 @@
  * Identity, enable, Current usage then Weekly limit, Test, More. Never infer quota
  * identities from positions/paths; unknown stays unknown. Technical evidence is opt-in.
  * Visible-session read-only bulk refresh, never background generation or OAuth. */
+import { toZhCN } from './i18n-zh-cn.js';
 'use strict';
 const $ = id => document.getElementById(id);
 const DEMO = new URLSearchParams(location.search).get('demo') === '1';
 const pref = key => { try { return localStorage.getItem(key); } catch { return null; } };
 const savePref = (key, value) => { try { localStorage.setItem(key, value); } catch { /* Storage is optional. */ } };
+function resolveInitialLang() {
+  const saved = pref('gemini_lang');
+  if (saved === 'en' || saved === 'zh-CN' || saved === 'zh-HK') return saved;
+  if (saved === 'zh') return 'zh-HK';
+  const nav = typeof navigator !== 'undefined' ? String(navigator.language || '') : '';
+  if (/^zh(?:-(?:CN|SG|Hans))?(?:$|-)/i.test(nav) && !/^zh-(?:HK|TW|MO|Hant)/i.test(nav)) return 'zh-CN';
+  return 'en';
+}
 const S = {
-  lang: /^(zh|zh-HK)$/.test(pref('gemini_lang') || '') ? 'zh-HK' : 'en',
+  lang: resolveInitialLang(),
   theme: pref('gemini_theme') === 'light' ? 'light' : 'dark',
   authenticated: false, authRequired: true, checkingSession: !DEMO, csrf: '', epoch: 0, routeEpoch: 0, overview: null, accounts: null, keys: null,
   demoScenario: 'sample', demoFault: false,
   settings: null, draft: null, diagnostics: null, lastLoaded: null, error: '', loading: false,
   route: 'accounts', auto: pref('gemini_quota_auto') !== 'false', timer: null, nextAuto: 0, bulkJob: null, bulkBusy: false, bulkError: '', bulkPoll: null, accountQuery: '', accountStatus: '', accountAttention: false, sessionQuery: '',
   filters: { query: '', status: '', model: '', account: '', page: 1, size: 10 },
+  audits: { items: [], total: 0, hasMore: false, facets: null, loading: false, error: '', q: '', status: '', model: '', account: '', issue: '', tools: '', limit: 50, beforeId: '', afterId: '', loadedOnce: false, selectedId: null, detail: null, detailLoading: false, detailTab: 'blocks' },
   clientModel: '', testModel: '', snippet: 'curl', prompt: '', output: '', testBusy: false, testError: '', testResult: null,
   settingsBusy: false, settingsError: '', settingsSaved: false, loginError: '',
   configCopied: false, lastInspectedRequestId: '', accountNotice: '', loginAcceptTerms: false,
@@ -23,10 +33,11 @@ const S = {
   accountQuickFilter: '', selectedAccountId: '', pendingAccountLookup: '', preset: 'codex', drawerReturnFocus: null,
 };
 const revealedKeys = new Map();
-const L = (en, zh) => S.lang === 'zh-HK' ? zh : en;
+const L = (en, zh) => S.lang === 'zh-HK' ? zh : S.lang === 'zh-CN' ? toZhCN(zh) : en;
 const words = {
   overview: ['Overview', '總覽'], accounts: ['Accounts', '帳戶'],
   sessions: ['Sessions & failovers', '工作階段與故障轉移'], requests: ['Requests & errors', '請求與錯誤'],
+  audits: ['Audit log', '審計日誌'],
   models: ['Client setup', '客戶端設定'], playground: ['Test request', '測試請求'], keys: ['API keys', 'API 金鑰'], settings: ['Settings', '設定'],
   ready: ['Signed in', '已登入'], signed_in: ['Signed in', '已登入'], cooldown: ['Cooldown', '冷卻中'], auth_error: ['Authentication error', '驗證失敗'],
   login_required: ['Login required', '需要登入'], disabled: ['Disabled', '已停用'], unknown: ['Unknown', '未知'],
@@ -61,6 +72,7 @@ const failoverReasons = {
 };
 const I18N = {
   en: Object.fromEntries([...Object.entries(words), ...Object.entries(failoverReasons)].map(([k, [en]]) => [k, en])),
+  'zh-CN': Object.fromEntries([...Object.entries(words), ...Object.entries(failoverReasons)].map(([k, [, zh]]) => [k, toZhCN(zh)])),
   'zh-HK': Object.fromEntries([...Object.entries(words), ...Object.entries(failoverReasons)].map(([k, [, zh]]) => [k, zh])),
 };
 const t = key => (I18N[S.lang] || I18N.en)[key] || key;
@@ -68,6 +80,7 @@ const paths = {
   overview: 'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z',
   accounts: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M16 3a4 4 0 0 1 0 8M22 21v-2a4 4 0 0 0-3-3.87M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0',
   sessions: 'M3 12h4l3-8 4 16 3-8h4', requests: 'M5 3h14v18H5zM9 7h6M9 12h6M9 17h4',
+  audits: 'M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2M9 5h6M9 12h6M9 16h4',
   models: 'm12 3 9 5-9 5-9-5 9-5zM3 12l9 5 9-5M3 16l9 5 9-5',
   playground: 'm8 5 11 7-11 7V5z',
   keys: 'M15 7a5 5 0 1 1-4 8L4 22H1v-3l7-7a5 5 0 0 1 7-5zM16 8h.01',
@@ -183,7 +196,10 @@ function download(name, data) {
 }
 function applyPreferences() { document.documentElement.lang = S.lang; document.documentElement.dataset.theme = S.theme; document.title = `Gemini App2API · ${L('Operations', '營運管理')}`; $('skip-link').textContent = L('Skip to content', '跳至內容'); }
 function preferenceControls() {
-  return [btn(S.lang === 'en' ? '繁中' : 'English', () => { S.lang = S.lang === 'en' ? 'zh-HK' : 'en'; savePref('gemini_lang', S.lang); applyPreferences(); render(); }, { id: 'language-toggle', 'aria-label': L('Switch to Traditional Chinese (Hong Kong)', '切換至英文') }),
+  const nextLang = S.lang === 'en' ? 'zh-CN' : S.lang === 'zh-CN' ? 'zh-HK' : 'en';
+  const langLabel = S.lang === 'en' ? '简中' : S.lang === 'zh-CN' ? '繁中' : 'English';
+  const langAria = nextLang === 'zh-CN' ? 'Switch to Simplified Chinese (zh-CN)' : nextLang === 'zh-HK' ? '切换至繁体中文（香港）' : '切換至英文';
+  return [btn(langLabel, () => { S.lang = nextLang; savePref('gemini_lang', S.lang); applyPreferences(); render(); }, { id: 'language-toggle', 'aria-label': langAria }),
     btn(icon(S.theme === 'dark' ? 'sun' : 'moon'), () => { S.theme = S.theme === 'dark' ? 'light' : 'dark'; savePref('gemini_theme', S.theme); render(); }, { id: 'theme-toggle', class: 'icon-button', 'aria-label': L('Toggle light / dark theme', '切換日間／夜間主題') })];
 }
 function safeError(error) {
@@ -281,6 +297,7 @@ const descriptions = {
   accounts: () => L('Usage, account access and a quick model check.', '用量、帳戶開關及快速模型測試。'),
   sessions: () => L('Follow sticky account assignments and recorded routing changes.', '追蹤固定帳戶分配及已記錄的路由變更。'),
   requests: () => L('Inspect recent outcomes. Request metadata only; never prompts or replies.', '檢視近期結果。僅顯示請求中繼資料，不含提示詞或回覆。'),
+  audits: () => L('Persistent SQLite audit log. Inspect prompts, replies, tool calls, latency and errors.', '持久化 SQLite 審計日誌。檢視提示詞、回覆、工具呼叫、延遲與錯誤。'),
   models: () => L('Connect your app using the OpenAI-compatible API.', '透過 OpenAI 相容 API 連接你的應用程式。'),
   playground: () => L('Send a message and check the response.', '發送訊息，檢查模型回應。'),
   keys: () => L('Credentials for API clients, separate from your admin session.', '供 API 客戶端使用的憑證，與管理員登入階段分開。'),
@@ -290,6 +307,7 @@ function routeActions() {
   if (S.route === 'accounts') return [btn([icon('refresh'), L('Refresh all', '全部更新')], () => startBulkRefresh('manual'), { id: 'refresh-all', class: 'primary', disabled: S.bulkBusy || S.loading, title: L('Read Google usage for all eligible accounts. No generation.', '查詢所有合資格帳戶的 Google 用量，不會生成回應。') }), signInControls()];
   if (S.route === 'keys') return btn([icon('plus'), L('Create key', '建立金鑰')], createKey, { id: 'create-key', class: 'primary' });
   if (S.route === 'requests') return btn([icon('download'), t('export')], () => exportRequests(), { id: 'export-requests', disabled: !S.overview });
+  if (S.route === 'audits') return [btn([icon('refresh'), t('refresh')], () => loadAudits({ reset: true, loadFacets: true }), { id: 'refresh-audits', disabled: S.audits.loading }), btn(L('Clear all', '清空全部'), clearAllAudits, { id: 'clear-audits', class: 'danger', disabled: S.audits.loading || !S.audits.total })];
   return null;
 }
 function captureFocus() {
@@ -357,12 +375,12 @@ function autoRefreshControl() {
   return el('label', { class: 'check-label auto-refresh' }, el('input', { id: 'auto-refresh', type: 'checkbox', role: 'switch', checked: S.auto, onChange: event => { S.auto = event.target.checked; savePref('gemini_quota_auto', String(S.auto)); if (S.auto) S.nextAuto = 0; scheduleRefresh(); maybeAutoRefresh(); } }), L('Auto refresh every 5 min', '每 5 分鐘自動更新'));
 }
 function desktopNavigation() {
-  return el('nav', { class: 'daily-nav', 'aria-label': L('Main navigation', '主要導覽') }, ['accounts', 'keys', 'settings'].map(navLink));
+  return el('nav', { class: 'daily-nav', 'aria-label': L('Main navigation', '主要導覽') }, ['accounts', 'audits', 'keys', 'settings'].map(navLink));
 }
 function gatewayBaseUrl() { return location.protocol === 'file:' ? 'http://127.0.0.1:18989/v1' : `${location.origin}/v1`; }
 function render() {
   const savedFocus = captureFocus(); applyPreferences();
-  if (!S.authenticated) { closeAccountDrawer(false); renderLogin(); restoreFocus(savedFocus); return; }
+  if (!S.authenticated) { closeAccountDrawer(false); closeAuditDrawer(); renderLogin(); restoreFocus(savedFocus); return; }
   const exitDemo = new URL(location.href); exitDemo.searchParams.delete('demo');
   const base = gatewayBaseUrl();
   const topbar = el('header', { class: 'topbar' }, brand(true), desktopNavigation(), el('div', { class: 'toolbar' },
@@ -387,7 +405,7 @@ function select(id, options, value, action) {
 }
 function renderPage() {
   if (!S.overview) return S.loading ? el('div', { class: 'panel loading' }, brandMark(), t('loading')) : el('div', { class: 'panel' }, empty(L('No gateway snapshot', '尚無閘道資料'), L('Refresh to load the admin API. No demo data is shown in real mode.', '請重新整理以讀取管理 API。真實模式不會顯示示範資料。')));
-  const pages = { overview: overviewPage, accounts: accountsPage, sessions: sessionsPage, requests: requestsPage, models: modelsPage, playground: playgroundPage, keys: keysPage, settings: settingsPage };
+  const pages = { overview: overviewPage, accounts: accountsPage, sessions: sessionsPage, requests: requestsPage, audits: auditsPage, models: modelsPage, playground: playgroundPage, keys: keysPage, settings: settingsPage };
   const animate = S.enterRoute; S.enterRoute = false;
   return el('div', { class: `stack${animate ? ' content-enter' : ''}` }, pages[S.route]());
 }
@@ -554,6 +572,7 @@ function applyRouteFromHash() {
   const model = account ? clean('model') : '';
   if (route !== 'keys') revealedKeys.clear();
   if (route !== 'accounts' || !account) closeAccountDrawer(false);
+  if (route !== 'audits') closeAuditDrawer();
   S.route = route; S.pendingAccountLookup = account; S.deepLink = { account, model, session: clean('session'), diagnostics: clean('diagnostics'), capabilities: clean('capabilities') };
   if (S.deepLink.account) {
     S.accountQuery = ''; S.accountStatus = ''; S.accountAttention = false; S.accountCategory = ''; S.accountQuickFilter = '';
@@ -563,6 +582,7 @@ function applyRouteFromHash() {
   if (S.deepLink.session) S.sessionQuery = S.deepLink.session;
   if (S.deepLink.capabilities === '1') { S.capabilitiesOpen = true; S.folds['capabilities-details'] = true; }
   if (S.deepLink.diagnostics === '1') { S.folds.advanced = true; $('advanced')?.setAttribute('open', ''); if (S.diagnostics) S.diagnosticsOpen = true; }
+  if (route === 'audits' && S.authenticated) void loadAudits({ reset: true, loadFacets: true });
   S.enterRoute = true; S.pendingRouteFocus = true;
 }
 function focusRouteTarget() {
@@ -1427,6 +1447,506 @@ function inspectRequest(raw) {
     fold('request-metadata-details', L('Safe request metadata', '安全請求中繼資料'), el('pre', { tabindex: '0' }, JSON.stringify(r, null, 2))),
     original.nativeEvidence && fold('request-provider-details', L('Native verification & output diagnostics', '原生驗證與輸出診斷'), upstreamErrorView(original.nativeEvidence, r.status)),
     btn([icon('download'), L('Export this request', '匯出此請求')], () => download('request', { schema: 'admin-request-metadata-v1', request: r }), { id: 'export-one-request' })), null);
+}
+function humanBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(2)} GiB`;
+  if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(2)} MiB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${bytes} B`;
+}
+function prettyJsonText(raw) {
+  if (!raw) return '';
+  try { return JSON.stringify(JSON.parse(raw), null, 2); } catch { return raw; }
+}
+let auditsSearchTimer = null;
+let auditInspectSeq = 0;
+async function loadAudits({ reset = false, loadFacets = false, beforeId = '', afterId = '' } = {}) {
+  if (!S.authenticated || DEMO) return;
+  const a = S.audits;
+  if (reset) { a.beforeId = ''; a.afterId = ''; }
+  else { a.beforeId = beforeId; a.afterId = afterId; }
+  a.loading = true; a.error = ''; a.loadedOnce = true;
+  if (S.route === 'audits') updateContent();
+  try {
+    const params = new URLSearchParams();
+    params.set('limit', String(a.limit || 50));
+    if (a.q) params.set('q', a.q);
+    if (a.status) params.set('status', a.status);
+    if (a.model) params.set('model', a.model);
+    if (a.account) params.set('account', a.account);
+    if (a.issue) params.set('issue', a.issue);
+    if (a.tools) params.set('tools', a.tools);
+    if (a.beforeId) params.set('before_id', String(a.beforeId));
+    if (a.afterId) params.set('after_id', String(a.afterId));
+    const reqs = [api(`/audits?${params.toString()}`)];
+    if (loadFacets || !a.facets) reqs.push(api('/audits?models=1'));
+    const [listRes, facetsRes] = await Promise.all(reqs);
+    a.items = Array.isArray(listRes.items) ? listRes.items : [];
+    a.total = Number(listRes.total || 0);
+    a.hasMore = Boolean(listRes.has_more);
+    if (facetsRes) a.facets = facetsRes;
+  } catch (error) {
+    a.error = safeError(error);
+  } finally {
+    a.loading = false;
+    if (S.route === 'audits') render();
+  }
+}
+function closeAuditDrawer() {
+  const a = S.audits;
+  a.selectedId = null; a.detail = null; a.detailLoading = false;
+  const drawer = $('audit-drawer'), backdrop = $('audit-drawer-backdrop');
+  if (drawer) { drawer.hidden = true; drawer.replaceChildren(); }
+  if (backdrop) backdrop.hidden = true;
+  document.querySelectorAll('.audit-table-wrap tbody tr.is-selected').forEach(tr => tr.classList.remove('is-selected'));
+}
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && S.audits.selectedId !== null && !$('action-dialog')?.open) closeAuditDrawer();
+});
+function auditKvGrid(pairs) {
+  return el('div', { class: 'audit-kv-grid' }, pairs.map(([k, v]) =>
+    el('div', { class: 'audit-kv-card' }, el('div', { class: 'audit-kv-key' }, k), el('div', { class: 'audit-kv-val' }, v ?? '-'))));
+}
+function renderInlineMd(text) {
+  const frag = document.createDocumentFragment();
+  const re = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*)/g;
+  let last = 0, m;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) frag.append(document.createTextNode(text.slice(last, m.index)));
+    const tok = m[0];
+    if (tok.startsWith('`')) frag.append(el('code', {}, tok.slice(1, -1)));
+    else if (tok.startsWith('**')) frag.append(el('strong', {}, tok.slice(2, -2)));
+    else frag.append(el('em', {}, tok.slice(1, -1)));
+    last = m.index + tok.length;
+  }
+  if (last < text.length) frag.append(document.createTextNode(text.slice(last)));
+  return frag;
+}
+function renderHighlightedJson(raw) {
+  const pre = el('pre', { tabindex: '0' });
+  const formatted = prettyJsonText(raw);
+  if (!formatted || formatted.length > 120000) { pre.textContent = formatted || ''; return pre; }
+  const re = /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
+  let last = 0, m;
+  while ((m = re.exec(formatted)) !== null) {
+    if (m.index > last) pre.append(document.createTextNode(formatted.slice(last, m.index)));
+    if (m[1] !== undefined) pre.append(el('span', { class: m[2] ? 'json-key' : 'json-str' }, m[1]), ...(m[2] ? [document.createTextNode(m[2])] : []));
+    else if (m[3] !== undefined) pre.append(el('span', { class: m[3] === 'null' ? 'json-null' : 'json-bool' }, m[3]));
+    else pre.append(el('span', { class: 'json-num' }, m[0]));
+    last = m.index + m[0].length;
+  }
+  if (last < formatted.length) pre.append(document.createTextNode(formatted.slice(last)));
+  return pre;
+}
+function renderSafeMarkdown(text) {
+  const str = String(text || '');
+  const trimmed = str.trim();
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    try { JSON.parse(trimmed); return renderHighlightedJson(trimmed); } catch {}
+  }
+  if (str.length > 100000) return el('div', { class: 'text-prewrap' }, str);
+  const root = el('div', { class: 'md-prose' });
+  const lines = str.replace(/\r\n/g, '\n').split('\n');
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const fence = line.match(/^```([A-Za-z0-9_+-]*)\s*$/);
+    if (fence) {
+      const lang = fence[1] || 'text';
+      const codeLines = [];
+      i++;
+      while (i < lines.length && !/^```\s*$/.test(lines[i])) { codeLines.push(lines[i]); i++; }
+      i++;
+      const codeText = codeLines.join('\n');
+      root.append(el('div', { class: 'md-code-wrap' },
+        el('div', { class: 'md-code-head' }, el('span', {}, lang), btn(t('copy'), () => copy(codeText), { class: 'compact quiet' })),
+        el('pre', { tabindex: '0' }, el('code', {}, codeText)),
+      ));
+      continue;
+    }
+    const h = line.match(/^(#{1,4})\s+(.+)$/);
+    if (h) { root.append(el(`h${h[1].length}`, {}, renderInlineMd(h[2]))); i++; continue; }
+    if (/^\s*[-*]\s+/.test(line)) {
+      const ul = el('ul', {});
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+        ul.append(el('li', {}, renderInlineMd(lines[i].replace(/^\s*[-*]\s+/, ''))));
+        i++;
+      }
+      root.append(ul); continue;
+    }
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const ol = el('ol', {});
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+        ol.append(el('li', {}, renderInlineMd(lines[i].replace(/^\s*\d+\.\s+/, ''))));
+        i++;
+      }
+      root.append(ol); continue;
+    }
+    if (/^>\s?/.test(line)) {
+      const qLines = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) { qLines.push(lines[i].replace(/^>\s?/, '')); i++; }
+      root.append(el('blockquote', {}, renderInlineMd(qLines.join('\n')))); continue;
+    }
+    if (!line.trim()) { i++; continue; }
+    const pLines = [];
+    while (i < lines.length && lines[i].trim() && !/^```|^#{1,4}\s|^\s*[-*]\s+|^\s*\d+\.\s+|^>\s?/.test(lines[i])) {
+      pLines.push(lines[i]); i++;
+    }
+    root.append(el('p', {}, renderInlineMd(pLines.join('\n'))));
+  }
+  return root;
+}
+function auditBlockCard(block) {
+  const bType = block.type || 'text';
+  const roleCls = bType === 'tool_call' || bType === 'tool_result'
+    ? 'chat-block--tool'
+    : block.role === 'assistant' ? 'chat-block--assistant'
+    : block.role === 'system' || block.role === 'developer' ? 'chat-block--system'
+    : 'chat-block--user';
+  const metaNodes = [badge(bType)];
+  if (block.role) metaNodes.push(badge(block.role, block.role === 'assistant' ? 'teal' : block.role === 'system' || block.role === 'developer' ? 'amber' : ''));
+  if (block.name) metaNodes.push(mono(block.name));
+  const rawSource = block.text || block.args || '';
+  if (rawSource) {
+    const single = String(rawSource).replace(/\s+/g, ' ').trim();
+    const preview = single.length > 96 ? `${single.slice(0, 96)}…` : single;
+    if (preview) metaNodes.push(el('span', { class: 'chat-block__preview' }, preview));
+    metaNodes.push(el('span', { class: 'chat-block__len' }, `${num(rawSource.length)} chars`));
+  }
+  const bodyEl = el('div', { class: 'chat-block__body' });
+  let rendered = false;
+  let showRaw = false;
+  const paintBody = () => {
+    const nodes = [];
+    const toolbar = el('div', { class: 'chat-block__toolbar' });
+    if (block.text) {
+      toolbar.append(btn(showRaw ? L('Formatted', '格式化') : L('Raw', '純文字'), () => { showRaw = !showRaw; paintBody(); }, { class: 'compact quiet' }));
+    }
+    toolbar.append(btn([icon('copy'), t('copy')], () => copy(rawSource), { class: 'compact quiet' }));
+    nodes.push(toolbar);
+    const contentWrap = el('div', { class: 'chat-block__content' });
+    if (block.args) contentWrap.append(renderHighlightedJson(block.args));
+    if (block.text) contentWrap.append(showRaw ? el('div', { class: 'text-prewrap' }, block.text) : renderSafeMarkdown(block.text));
+    nodes.push(contentWrap);
+    bodyEl.replaceChildren(...nodes);
+  };
+  const details = el('details', { class: `chat-block ${roleCls}` },
+    el('summary', { class: 'chat-block__summary' }, ...metaNodes),
+    bodyEl,
+  );
+  details.addEventListener('toggle', () => {
+    if (details.open && !rendered) { rendered = true; paintBody(); }
+  });
+  return details;
+}
+function auditCodePanel(title, text) {
+  const content = text == null || text === '' ? '' : String(text);
+  const trimmed = content.trim();
+  const isJson = (trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'));
+  const bodyNode = !content
+    ? el('pre', { tabindex: '0' }, L('(empty)', '（空）'))
+    : isJson ? renderHighlightedJson(content) : el('pre', { tabindex: '0' }, content);
+  return el('section', { class: 'code-panel' },
+    el('header', { class: 'code-panel__head' },
+      el('h3', {}, title),
+      btn(t('copy'), () => copy(content), { class: 'compact quiet', disabled: !content }),
+    ),
+    el('div', { class: 'code-panel__body' }, bodyNode),
+  );
+}
+function extractAuditBlocks(d) {
+  const resBlocks = [];
+  if (d.reply) resBlocks.push({ type: 'text', role: 'assistant', text: d.reply });
+  if (d.tool_calls) {
+    try {
+      const calls = JSON.parse(d.tool_calls);
+      if (Array.isArray(calls)) {
+        for (const c of calls) {
+          const name = c?.name || c?.function?.name || 'tool_call';
+          const args = c?.arguments ?? c?.function?.arguments ?? JSON.stringify(c, null, 2);
+          resBlocks.push({ type: 'tool_call', role: 'assistant', name, args: typeof args === 'string' ? args : JSON.stringify(args, null, 2) });
+        }
+      }
+    } catch {
+      resBlocks.push({ type: 'tool_call', role: 'assistant', text: d.tool_calls });
+    }
+  }
+  const reqBlocks = [];
+  let systemPrompt = '';
+  if (d.request_body) {
+    try {
+      const body = JSON.parse(d.request_body);
+      if (typeof body.instructions === 'string' && body.instructions.trim()) systemPrompt = body.instructions;
+      if (Array.isArray(body.messages)) {
+        for (const m of body.messages) {
+          const role = m?.role || 'user';
+          const text = typeof m?.content === 'string' ? m.content
+            : Array.isArray(m?.content) ? m.content.map(p => typeof p === 'string' ? p : p?.text || JSON.stringify(p)).join('\n')
+            : m?.tool_calls ? JSON.stringify(m.tool_calls, null, 2)
+            : JSON.stringify(m, null, 2);
+          reqBlocks.push({ type: role === 'tool' ? 'tool_result' : 'text', role, name: m?.name || '', text });
+        }
+      } else if (typeof body.input === 'string') {
+        reqBlocks.push({ type: 'text', role: 'user', text: body.input });
+      } else if (Array.isArray(body.input)) {
+        for (const item of body.input) {
+          if (item?.type === 'function_call') {
+            reqBlocks.push({ type: 'tool_call', role: 'assistant', name: item.name || '', args: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments ?? {}, null, 2) });
+          } else if (item?.type === 'function_call_output') {
+            reqBlocks.push({ type: 'tool_result', role: 'tool', name: item.call_id || '', text: typeof item.output === 'string' ? item.output : JSON.stringify(item.output ?? '', null, 2) });
+          } else {
+            const role = item?.role || item?.type || 'user';
+            const text = typeof item?.content === 'string' ? item.content
+              : Array.isArray(item?.content) ? item.content.map(p => typeof p === 'string' ? p : p?.text || JSON.stringify(p)).join('\n')
+              : typeof item?.text === 'string' ? item.text
+              : JSON.stringify(item, null, 2);
+            reqBlocks.push({ type: 'text', role, text });
+          }
+        }
+      }
+      if (!reqBlocks.length && !systemPrompt) reqBlocks.push({ type: 'text', role: 'request', text: JSON.stringify(body, null, 2) });
+    } catch {
+      reqBlocks.push({ type: 'text', role: 'request', text: d.request_body });
+    }
+  }
+  return { resBlocks, reqBlocks, systemPrompt };
+}
+function renderAuditDrawer() {
+  const drawer = $('audit-drawer'), backdrop = $('audit-drawer-backdrop');
+  if (!drawer || !backdrop) return;
+  const a = S.audits;
+  if (a.selectedId === null) { drawer.hidden = true; backdrop.hidden = true; return; }
+  backdrop.hidden = false;
+  backdrop.onclick = closeAuditDrawer;
+  drawer.hidden = false;
+  if (a.detailLoading || !a.detail) {
+    drawer.replaceChildren(
+      el('div', { class: 'drawer-head' },
+        el('div', {}, el('h2', { id: 'audit-drawer-title' }, L(`Audit #${a.selectedId}`, `審計紀錄 #${a.selectedId}`)), el('p', { class: 'muted', style: 'font-size:12px' }, t('loading'))),
+        btn(t('close'), closeAuditDrawer, { class: 'compact quiet' }),
+      ),
+      el('div', { class: 'drawer-body' }, el('p', { class: 'muted' }, t('loading'))),
+    );
+    return;
+  }
+  const d = a.detail;
+  const modelText = d.served_model && d.served_model !== d.model ? `${d.model} → ${d.served_model}` : (d.model || '-');
+  const { resBlocks, reqBlocks, systemPrompt } = extractAuditBlocks(d);
+  const toolsFormatted = prettyJsonText(d.tool_calls);
+  const errFormatted = prettyJsonText(d.error);
+  const reqFormatted = prettyJsonText(d.request_body);
+  const paramsFormatted = prettyJsonText(d.params);
+  const headersFormatted = prettyJsonText(d.req_headers);
+
+  const tabBar = el('div', { class: 'audit-tabs', role: 'tablist' }, [
+    ['blocks', L(`Blocks (${resBlocks.length + reqBlocks.length})`, `內容塊 (${resBlocks.length + reqBlocks.length})`)],
+    ['tools', toolsFormatted ? 'MCP / Tools •' : 'MCP / Tools'],
+    ['raw', L('Raw', '原始報文')],
+  ].map(([key, label]) => btn(label, () => { a.detailTab = key; renderAuditDrawer(); }, {
+    role: 'tab', 'aria-selected': String(a.detailTab === key), class: 'compact',
+  })));
+
+  const tabContent = [];
+  if (a.detailTab === 'blocks') {
+    const toggleGroup = (groupEl, open) => groupEl.querySelectorAll('details.chat-block').forEach(node => { node.open = open; });
+    const resGroup = el('div', { class: 'audit-blocks-group' }, ...(resBlocks.length ? resBlocks.map(auditBlockCard) : [el('p', { class: 'muted', style: 'font-size:12px' }, L('No response blocks extracted', '未提取到回應塊'))]));
+    tabContent.push(
+      el('div', { class: 'audit-section-head' },
+        el('h3', { class: 'audit-subhead' }, L(`Response Blocks (${resBlocks.length})`, `回應內容塊 (${resBlocks.length})`)),
+        resBlocks.length > 0 && el('div', { class: 'audit-section-actions' },
+          btn(L('Expand all', '全部展開'), () => toggleGroup(resGroup, true), { class: 'compact quiet' }),
+          btn(L('Collapse all', '全部摺疊'), () => toggleGroup(resGroup, false), { class: 'compact quiet' }),
+        ),
+      ),
+      resGroup,
+    );
+
+    const reqGroup = el('div', { class: 'audit-blocks-group' }, ...(reqBlocks.length ? reqBlocks.map(auditBlockCard) : [el('p', { class: 'muted', style: 'font-size:12px' }, L('No request blocks extracted', '未提取到請求塊'))]));
+    tabContent.push(
+      el('div', { class: 'audit-section-head' },
+        el('h3', { class: 'audit-subhead' }, L(`Request Blocks (${reqBlocks.length})`, `請求內容塊 (${reqBlocks.length})`)),
+        reqBlocks.length > 0 && el('div', { class: 'audit-section-actions' },
+          btn(L('Expand all', '全部展開'), () => toggleGroup(reqGroup, true), { class: 'compact quiet' }),
+          btn(L('Collapse all', '全部摺疊'), () => toggleGroup(reqGroup, false), { class: 'compact quiet' }),
+        ),
+      ),
+      reqGroup,
+    );
+
+    if (systemPrompt) {
+      tabContent.push(el('div', { class: 'audit-section-head' }, el('h3', { class: 'audit-subhead' }, 'System Prompt')));
+      tabContent.push(auditBlockCard({ type: 'text', role: 'system', text: systemPrompt }));
+    }
+  } else if (a.detailTab === 'tools') {
+    if (toolsFormatted) tabContent.push(auditCodePanel('tool_calls', toolsFormatted));
+    else tabContent.push(el('p', { class: 'muted', style: 'font-size:12px' }, L('No tool call metadata', '本次請求無工具呼叫數據')));
+  } else {
+    if (d.raw_truncated) {
+      tabContent.push(notice(L(`Note: payload was truncated (${humanBytes(d.raw_bytes)})`, `注意：部分報文已被截斷存儲（raw_bytes=${humanBytes(d.raw_bytes)}）`), 'amber'));
+    }
+    tabContent.push(
+      auditCodePanel('req_headers', headersFormatted),
+      auditCodePanel('params', paramsFormatted),
+      auditCodePanel('request_body', reqFormatted),
+      auditCodePanel('reply', d.reply || ''),
+      ...(errFormatted ? [auditCodePanel('error', errFormatted)] : []),
+    );
+  }
+
+  drawer.replaceChildren(
+    el('div', { class: 'drawer-head' },
+      el('div', { style: 'min-width:0' },
+        el('h2', { id: 'audit-drawer-title', style: 'font-size:16px;word-break:break-all' }, `#${d.id} ${d.method || 'POST'} ${d.path || ''}`),
+        el('p', { class: 'muted mono', style: 'font-size:11.5px;margin-top:3px' }, `${date(d.ts)} · ${d.client_ip || '-'} · ${modelText}`),
+      ),
+      el('div', { class: 'row', style: 'flex-shrink:0' },
+        btn(L('Export JSON', '匯出 JSON'), () => download(`audit-${d.id}`, d), { class: 'compact' }),
+        btn(L('Delete Record', '刪除紀錄'), () => void deleteAudit(d.id), { class: 'compact danger' }),
+        btn('×', closeAuditDrawer, { class: 'compact quiet', 'aria-label': t('close') }),
+      ),
+    ),
+    el('div', { class: 'drawer-body' },
+      auditKvGrid([
+        ['Status', String(d.status ?? 0)],
+        ['Model', modelText],
+        ['Account / Proxy', `${d.account || '-'} / direct`],
+        ['TTFB / Total', `${duration(d.ttfb_ms)} / ${duration(d.total_ms)}`],
+        ['Tokens (P/O/Total)', `${num(d.prompt_tokens)} / ${num(d.output_tokens)} / ${num(d.total_tokens)}`],
+        ['Attempts / Tools', `${num(d.attempts)} / ${num(d.tool_call_count)}`],
+        ['Issue / Finish', `${d.issue || '-'} / ${d.finish_reason || '-'}`],
+        ['Resp ID / Key FP', `${d.req_id || '-'} / ${d.key_fp || '-'}`],
+        ['User-Agent', d.user_agent || '-'],
+      ]),
+      errFormatted && notice(d.error_preview || d.issue || errFormatted, 'rose'),
+      tabBar,
+      ...tabContent,
+    ),
+  );
+}
+async function openAuditDrawer(id) {
+  const a = S.audits;
+  const seq = ++auditInspectSeq;
+  a.selectedId = id; a.detail = null; a.detailLoading = true; a.detailTab = 'blocks';
+  document.querySelectorAll('.audit-table-wrap tbody tr').forEach(tr => tr.classList.toggle('is-selected', tr.dataset.auditId === String(id)));
+  renderAuditDrawer();
+  try {
+    const d = await api(`/audits/${encodeURIComponent(id)}`);
+    if (seq !== auditInspectSeq) return;
+    a.detail = d; a.detailLoading = false;
+    renderAuditDrawer();
+  } catch (error) {
+    if (seq !== auditInspectSeq) return;
+    closeAuditDrawer();
+    toast(safeError(error));
+  }
+}
+async function deleteAudit(id) {
+  confirmDialog(
+    L(`Delete audit #${id}?`, `刪除審計紀錄 #${id}？`),
+    L('This permanently removes the stored request and reply body from SQLite.', '此操作會從 SQLite 永久刪除此筆請求與回覆內容。'),
+    L(`Audit #${id}`, `審計紀錄 #${id}`),
+    async () => {
+      await api(`/audits/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (S.audits.selectedId === id) closeAuditDrawer();
+      toast(L('Audit record deleted.', '已刪除審計紀錄。'));
+      await loadAudits({ reset: true, loadFacets: true });
+    },
+    L('Delete', '刪除'),
+  );
+}
+async function clearAllAudits() {
+  confirmDialog(
+    L('Clear all audit logs?', '清空全部審計日誌？'),
+    L('All stored request/response audit records will be permanently removed.', '所有已保存的請求／回應審計紀錄將被永久清空。'),
+    L(`${num(S.audits.total)} records`, `${num(S.audits.total)} 筆紀錄`),
+    async () => {
+      await api('/audits', { method: 'DELETE' });
+      closeAuditDrawer();
+      toast(L('Audit log cleared.', '已清空審計日誌。'));
+      await loadAudits({ reset: true, loadFacets: true });
+    },
+    L('Clear all', '清空全部'),
+  );
+}
+function auditsPage() {
+  const a = S.audits;
+  if (!a.loadedOnce && !a.loading && !DEMO) { void loadAudits({ reset: true, loadFacets: true }); }
+  const f = a.facets || { models: [], accounts: [], issues: [], retention_days: 30, size_bytes: 0, total_count: 0 };
+  const setFilter = (key, val) => { a[key] = val; void loadAudits({ reset: true }); };
+  const clearFilters = () => { a.q = ''; a.status = ''; a.model = ''; a.account = ''; a.issue = ''; a.tools = ''; void loadAudits({ reset: true }); };
+  const firstId = a.items.length ? a.items[0].id : null;
+  const lastId = a.items.length ? a.items[a.items.length - 1].id : null;
+  const headers = [
+    'ID',
+    t('time'),
+    L('Method & Path', '方法與路徑'),
+    L('Model / Served', '模型／實際服務'),
+    L('Status / Finish', '狀態／結束'),
+    t('account'),
+    L('Issue', '診斷問題'),
+    L('TTFB / Total', 'TTFB／總耗時'),
+    L('Tokens (In/Out)', '令牌 (In/Out)'),
+  ];
+  const tableEl = a.items.length
+    ? el('div', { class: 'table-wrap audit-table-wrap', tabindex: '0', role: 'region', 'aria-label': L('Audit log table', '審計日誌列表') },
+      el('table', {},
+        el('thead', {}, el('tr', {}, headers.map(h => el('th', { scope: 'col' }, h)))),
+        el('tbody', {}, a.items.map(it => {
+          const failed = Number(it.status) >= 400 || Boolean(it.failed);
+          const ok = Number(it.status) >= 200 && Number(it.status) < 300 && !it.failed;
+          const modelLabel = it.served_model && it.served_model !== it.model ? `${it.model} → ${it.served_model}` : (it.model || '-');
+          return el('tr', {
+            'data-audit-id': String(it.id),
+            class: a.selectedId === it.id ? 'is-selected' : '',
+            onClick: () => void openAuditDrawer(it.id),
+          },
+            el('td', {}, el('div', { class: 'row', style: 'gap:4px;justify-content:flex-start;flex-wrap:nowrap' }, mono(`#${it.id}`), it.stream ? badge('SSE') : null)),
+            el('td', {}, el('span', { class: 'mono', style: 'white-space:nowrap' }, date(it.ts))),
+            el('td', {}, el('div', { class: 'row', style: 'gap:5px;justify-content:flex-start;flex-wrap:nowrap' }, badge(it.method || 'POST'), el('span', { class: 'mono cell-trunc', title: it.path || '' }, it.path || '/'))),
+            el('td', {}, el('span', { class: 'mono cell-trunc', title: modelLabel }, modelLabel)),
+            el('td', {}, el('div', { class: 'row', style: 'gap:4px;justify-content:flex-start;flex-wrap:nowrap' }, badge(String(it.status ?? 0), failed ? 'rose' : ok ? 'teal' : ''), it.finish_reason ? badge(it.finish_reason) : null)),
+            el('td', {}, el('span', { class: 'mono cell-trunc', title: it.account || '-' }, it.account || '-')),
+            el('td', {}, it.issue ? badge(it.issue, failed ? 'rose' : 'amber', false, { title: it.error_preview || it.issue }) : el('span', { class: 'muted' }, '-')),
+            el('td', {}, el('span', { class: 'mono', style: 'white-space:nowrap' }, `${duration(it.ttfb_ms)} / ${duration(it.total_ms)}`)),
+            el('td', {}, el('div', { class: 'row', style: 'gap:4px;justify-content:flex-end;flex-wrap:nowrap' }, el('span', { class: 'mono' }, `${num(it.prompt_tokens)} / ${num(it.output_tokens)}`), it.tool_call_count > 0 ? badge(`T:${it.tool_call_count}`) : null)),
+          );
+        })),
+      ))
+    : empty();
+  const sub = L(
+    `${num(a.total)} matching · DB ${humanBytes(f.size_bytes)} · retention ${f.retention_days}d · click row to inspect`,
+    `符合 ${num(a.total)} 筆 · 資料庫 ${humanBytes(f.size_bytes)} · 保留 ${f.retention_days} 天 · 點擊列開啟右側抽屜`,
+  );
+  return [
+    a.error && notice(a.error, 'rose'),
+    panel(L('Full audit log', '全量審計日誌'), sub, [
+      el('div', { class: 'filterbar' },
+        el('label', { class: 'search' }, L('Search', '搜尋'), el('input', {
+          type: 'search', id: 'audit-search', value: a.q,
+          placeholder: L('Prompt, reply, model, IP, req ID…', '提示詞、回覆、模型、IP、請求 ID…'),
+          onInput: e => { a.q = e.target.value; clearTimeout(auditsSearchTimer); auditsSearchTimer = setTimeout(() => loadAudits({ reset: true }), 300); },
+        })),
+        el('label', {}, t('status'), select('audit-status', [['', L('All', '全部')], ['ok', '2xx OK'], ['4xx', '4xx'], ['5xx', '5xx'], ['failed', L('Failed', '失敗')]], a.status, v => setFilter('status', v))),
+        el('label', {}, t('model'), select('audit-model', [['', L('All models', '所有模型')], ...(f.models || []).map(m => [m, m])], a.model, v => setFilter('model', v))),
+        el('label', {}, t('account'), select('audit-account', [['', L('All accounts', '所有帳戶')], ...(f.accounts || []).map(acc => [acc, acc])], a.account, v => setFilter('account', v))),
+        el('label', {}, L('Issue', '診斷問題'), select('audit-issue', [['', L('All', '全部')], ['any', L('Any issue', '有異常')], ['none', L('No issue', '無異常')], ...(f.issues || []).map(i => [i, i])], a.issue, v => setFilter('issue', v))),
+        el('label', {}, L('Tools', '工具'), select('audit-tools', [['', L('All', '全部')], ['1', L('With tools', '含工具呼叫')], ['0', L('No tools', '無工具呼叫')]], a.tools, v => setFilter('tools', v))),
+        btn(L('Reset', '重設'), clearFilters, { id: 'audit-reset', class: 'quiet' }),
+      ),
+      a.loading && !a.items.length ? el('div', { class: 'panel-body muted' }, t('loading')) : tableEl,
+      el('div', { class: 'table-foot' },
+        el('span', { role: 'status' }, a.items.length
+          ? L(`${a.items.length} of ${num(a.total)} (#${firstId}..#${lastId})`, `顯示 ${a.items.length}／共 ${num(a.total)} 筆 (#${firstId}..#${lastId})`)
+          : L(`0 of ${num(a.total)}`, `0／共 ${num(a.total)} 筆`)),
+        el('div', { class: 'actions' },
+          el('label', { class: 'row' }, L('Rows', '每頁'), select('audit-limit', [20, 50, 100].map(n => [n, n]), a.limit, v => { a.limit = Number(v); void loadAudits({ reset: true }); })),
+          btn(t('previous'), () => firstId && loadAudits({ afterId: firstId }), { id: 'audit-prev', disabled: a.loading || (!a.beforeId && !a.afterId) || !firstId }),
+          btn(t('next'), () => lastId && loadAudits({ beforeId: lastId }), { id: 'audit-next', disabled: a.loading || !a.hasMore || !lastId }),
+        ),
+      ),
+    ]),
+  ];
 }
 function modelOptions() { return (S.overview.models || []).map(model => [model, model]); }
 function snippet() {

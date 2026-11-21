@@ -116,7 +116,7 @@ export function validateSettings(input, { partial = false } = {}) {
 function passwordRecord(password) {
   if (
     typeof password !== "string" ||
-    password.length < 12 ||
+    password.length < 8 ||
     password.length > 256
   )
     throw fault("ADMIN_PASSWORD_MIN_12_CHARS");

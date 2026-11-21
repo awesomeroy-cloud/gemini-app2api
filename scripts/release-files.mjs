@@ -44,6 +44,7 @@ const fixed = [
   "src/image-url.mjs",
   "src/admin-v2/index.html",
   "src/admin-v2/app.js",
+  "src/admin-v2/i18n-zh-cn.js",
   "src/admin-v2/styles.css",
   "native-wire/protobuf.mjs",
   "native-wire/robin-current.mjs",
