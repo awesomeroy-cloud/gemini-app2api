@@ -14,7 +14,7 @@ Use your eligible Google Gemini accounts in **Pi**, **OpenClaw**, **Cursor**, **
 ![Docker Ready](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/license-MIT-64748B)](LICENSE)
 
-**English** · [繁體中文](README.zh.md) · [Quick Start](#quick-start) · [Connect Client](#connect-your-client) · [Models & Quota](#quota-consumption) · [API Reference](docs/API_SUPPORT.md) · [Operations](docs/OPERATIONS.md)
+**English** · [简体中文](README.zh-CN.md) · [繁體中文](README.zh.md) · [Quick Start](#quick-start) · [Connect Client](#connect-your-client) · [Models & Quota](#quota-consumption) · [Audit Log](#audit-log) · [API Reference](docs/API_SUPPORT.md) · [Operations](docs/OPERATIONS.md)
 
 </div>
 
@@ -161,7 +161,21 @@ Empirical `GetUsageInfo` observations on Gemini AI Pro accounts (`neon_pro_polic
 **Highlights:**
 - **Resilient HTTP/2 & Proxy Support:** `15s` HTTP/2 `PING` + TCP keepalives, zero-dependency `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` `CONNECT` tunneling, retryable `503 SERVER_SHUTDOWN` restarts, and bounded automatic recovery.
 - **Built for Long E2E & Agent Loops:** Up to `256` caller tool declarations (`512 KiB` / `16,384` nodes), structured outputs (`json_schema` / `json_object`), opt-in `native_search` citations, and parallel HTTP/2 multimodal image uploads (`256` images / `20 MiB` per image safety bounds + per-account in-memory `blobId` caching).
-- **Zero-Dependency Security & Bilingual Console:** `0700`/`0600` private state, `scrypt` admin auth, SHA-256 key vault, CSRF/Origin guards, and live per-account × per-model telemetry (`English` / `繁體中文`, zero prompt logging).
+- **Zero-Dependency Security & Trilingual Console:** `0700`/`0600` private state, `scrypt` admin auth, SHA-256 key vault, CSRF/Origin guards, live per-account × per-model telemetry, and **English / 简体中文 / 繁體中文** UI with automatic Simplified Chinese browser detection.
+
+<a id="audit-log"></a>
+## Audit Log & Operations Console (Fork Additions)
+
+This fork adds a zero-dependency persistent request/response audit module powered by Node.js 22 built-in `node:sqlite` (`/data/audit.db`, mode `0600`, WAL mode):
+
+- **Storage & Retention:** Two-table layout (`audit_meta` + `audit_body`) with lazy initialization, per-field size caps (`request_body` 256 KiB, `reply` 512 KiB, `tool_calls` 256 KiB, `error` 64 KiB), automatic hourly pruning (`GATEWAY_AUDIT_RETENTION_DAYS`, default `30` days, max `10,000` rows).
+- **Redaction:** Strips inline base64 media payloads (`data:image|audio|video;base64,...`) and redacts sensitive headers (`authorization`, `cookie`, `set-cookie`, `x-csrf-token`, `x-api-key`) before persistence.
+- **Admin Audit Page (`/admin/#audits`):**
+  - Multi-facet filtering (`q` keyword search, `status`, `model`, `account`, `issue`, `tools`) and keyset pagination (`before_id` / `after_id`).
+  - Right-side inspector drawer (`gw2api`-style) with summary KPI grid (`Status`, `Model / Served`, `Account`, `TTFB / Total`, `Tokens`, `Attempts / Tools`, `Issue / Finish`, `Req ID / Key FP`, `User-Agent`), `Blocks` / `MCP / Tools` / `Raw` tabs, Response-first / Request-below collapsible cards, role-colored left borders, DOM-safe Markdown rendering, and JSON syntax highlighting.
+  - Admin endpoints protected by session cookie + exact `Origin` + CSRF: `GET /admin/api/audits` (`?models=1` for facets), `GET /admin/api/audits/:id`, `DELETE /admin/api/audits/:id`, and `DELETE /admin/api/audits`.
+- **Trilingual UI (`English` / `简体中文` / `繁體中文`):** Adds `src/admin-v2/i18n-zh-cn.js` covering all Admin V2 labels and messages with automatic `zh-CN` detection and a dedicated `简中` toggle in the top toolbar.
+- **Upstream Sync:** `.github/workflows/sync-upstream.yml` merges `ShawTim/gemini-app2api@main` daily without discarding fork features, pushing only when all verification tests pass and opening an issue on conflict.
 
 ![Gemini App2API Operations Console — Dark Theme (synthetic demo data)](docs/assets/admin-v2-demo-dark-desktop.png)
 

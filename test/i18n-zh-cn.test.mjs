@@ -125,7 +125,7 @@ function loadAppFixture({ savedLang = null, navLang = 'en-US' } = {}) {
   return { ...sandbox.subject, storage, document: sandbox.document };
 }
 
-test('app.js supports zh-CN auto-detection, preserves saved preferences, and cycles en -> zh-CN -> zh-HK -> en', () => {
+test('app.js supports zh-CN auto-detection, preserves saved preferences, and exposes #language-zh-cn alongside #language-toggle', () => {
   const autoCn = loadAppFixture({ savedLang: null, navLang: 'zh-CN' });
   assert.equal(autoCn.S.lang, 'zh-CN');
   assert.equal(autoCn.t('accounts'), '账号');
@@ -140,25 +140,26 @@ test('app.js supports zh-CN auto-detection, preserves saved preferences, and cyc
   assert.equal(savedEn.S.lang, 'en');
   assert.equal(savedEn.t('accounts'), 'Accounts');
 
-  // Cycle: en -> zh-CN -> zh-HK -> en
-  const [btn1] = savedEn.preferenceControls();
-  assert.equal(btn1.attrs.id, 'language-toggle');
-  assert.equal(btn1.children[0], '简中');
-  btn1.listeners.click();
+  // #language-zh-cn toggles en <-> zh-CN
+  const [zhCnBtn, hkToggle] = savedEn.preferenceControls();
+  assert.equal(zhCnBtn.attrs.id, 'language-zh-cn');
+  assert.equal(zhCnBtn.children[0], '简中');
+  zhCnBtn.listeners.click();
   assert.equal(savedEn.S.lang, 'zh-CN');
   assert.equal(savedEn.storage.get('gemini_lang'), 'zh-CN');
 
-  const [btn2] = savedEn.preferenceControls();
-  assert.equal(btn2.children[0], '繁中');
-  btn2.listeners.click();
-  assert.equal(savedEn.S.lang, 'zh-HK');
-  assert.equal(savedEn.storage.get('gemini_lang'), 'zh-HK');
-
-  const [btn3] = savedEn.preferenceControls();
-  assert.equal(btn3.children[0], 'English');
-  btn3.listeners.click();
+  const [zhCnBtn2] = savedEn.preferenceControls();
+  assert.equal(zhCnBtn2.children[0], 'EN');
+  zhCnBtn2.listeners.click();
   assert.equal(savedEn.S.lang, 'en');
-  assert.equal(savedEn.storage.get('gemini_lang'), 'en');
+
+  // #language-toggle preserves en <-> zh-HK toggle for upstream Playwright specs
+  assert.equal(hkToggle.attrs.id, 'language-toggle');
+  hkToggle.listeners.click();
+  assert.equal(savedEn.S.lang, 'zh-HK');
+  const [, hkToggle2] = savedEn.preferenceControls();
+  hkToggle2.listeners.click();
+  assert.equal(savedEn.S.lang, 'en');
 });
 
 test('gateway app.mjs serves /admin/i18n-zh-cn.js as application/javascript and Dockerfile copies it', async () => {

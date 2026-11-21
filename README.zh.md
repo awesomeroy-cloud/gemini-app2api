@@ -14,7 +14,7 @@
 ![Docker Ready](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/license-MIT-64748B)](LICENSE)
 
-[English](README.md) · **繁體中文** · [快速開始](#quick-start) · [連接客戶端](#connect-your-client) · [模型與配額](#quota-consumption) · [API 參考](docs/API_SUPPORT.md) · [維運指南](docs/OPERATIONS.md)
+[English](README.md) · [简体中文](README.zh-CN.md) · **繁體中文** · [快速開始](#quick-start) · [連接客戶端](#connect-your-client) · [模型與配額](#quota-consumption) · [審計日誌](#audit-log) · [API 參考](docs/API_SUPPORT.md) · [維運指南](docs/OPERATIONS.md)
 
 </div>
 
@@ -161,7 +161,21 @@ Gemini AI Pro 帳戶實測 `GetUsageInfo` 參考數據（`neon_pro_policy`，非
 **核心亮點：**
 - **穩定傳輸與代理支援：** `15s` HTTP/2 `PING`＋TCP 保活、零依賴 `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` 隧道、關機重啟回傳可重試 `503 SERVER_SHUTDOWN`，以及有界自動恢復。
 - **專為長流程 E2E 與 Agent 迴圈打造：** 支援最多 `256` 個工具宣告（`512 KiB` / `16,384` 節點）、結構化輸出（`json_schema` / `json_object`）、可選 `native_search` 網頁引用，以及並行 HTTP/2 多圖上載（安全護欄 `256` 張／單張 `20 MiB`＋同帳號純記憶體 `blobId` 快取）。
-- **零依賴安全與雙語後台：** `0700`/`0600` 私密狀態、`scrypt` 密碼雜湊、SHA-256 金鑰庫、CSRF/Origin 防護，以及零提示詞日誌的帳戶 × 模型即時觀測後台（`English` / `繁體中文`）。
+- **零依賴安全與三語後台：** `0700`/`0600` 私密狀態、`scrypt` 密碼雜湊、SHA-256 金鑰庫、CSRF/Origin 防護、帳戶 × 模型即時觀測，並支援 **`English` / `简体中文` / `繁體中文`** 介面。
+
+<a id="audit-log"></a>
+## 審計頁面與擴充功能（Fork 新增）
+
+本 Fork 基於 Node.js 22 內建 `node:sqlite` 新增零依賴持久化審計模組（`/data/audit.db`，權限 `0600`，WAL 模式）：
+
+- **存儲與清理：** `audit_meta` + `audit_body` 雙表結構、按需延遲建庫、單欄位截斷上限（請求體 256 KiB、回覆 512 KiB、工具呼叫 256 KiB、錯誤 64 KiB），預設保留 `30` 天（可設 `GATEWAY_AUDIT_RETENTION_DAYS`）且上限 `10,000` 筆，每小時自動清理。
+- **自動脫敏：** 寫入前自動剝離 `data:image|audio|video;base64,...` 媒體資料，並遮罩 `authorization`、`cookie`、`set-cookie`、`x-csrf-token`、`x-api-key` 等敏感標頭。
+- **審計日誌頁面（`/admin/#audits`）：**
+  - 支援關鍵字檢索、狀態碼、模型、帳戶、診斷問題、工具呼叫多維篩選與游標分頁（`before_id` / `after_id`）。
+  - 點擊任意列開啟右側檢視抽屜：摘要 KV 網格（狀態、模型／實際服務、帳戶、TTFB／總耗時、Token、嘗試次數／工具數、異常／結束原因、請求 ID／金鑰指紋、User-Agent）、`內容塊`／`MCP / Tools`／`原始報文` 三頁籤、回應在上／請求在下之角色色條卡片、DOM 級 Markdown 排版與 JSON 語法高亮，支援匯出 JSON、單筆刪除與清空。
+  - 管理 API（受會話 Cookie + Origin + CSRF 保護）：`GET /admin/api/audits`（`?models=1` 查詢維度）、`GET /admin/api/audits/:id`、`DELETE /admin/api/audits/:id`、`DELETE /admin/api/audits`。
+- **簡體中文語言包：** 新增 `src/admin-v2/i18n-zh-cn.js`，簡體中文瀏覽器自動啟用，頂欄提供 `简中` 一鍵切換。
+- **上游自動同步：** `.github/workflows/sync-upstream.yml` 每日自動合併 `ShawTim/gemini-app2api@main`，測試全過才推送且保留本 Fork 新增功能，遇衝突自動建 Issue 提示。
 
 ![Gemini App2API 維運管理台 —— 深色主題（合成示範資料）](docs/assets/admin-v2-demo-dark-desktop.png)
 

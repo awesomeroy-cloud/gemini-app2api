@@ -196,11 +196,11 @@ function download(name, data) {
 }
 function applyPreferences() { document.documentElement.lang = S.lang; document.documentElement.dataset.theme = S.theme; document.title = `Gemini App2API · ${L('Operations', '營運管理')}`; $('skip-link').textContent = L('Skip to content', '跳至內容'); }
 function preferenceControls() {
-  const nextLang = S.lang === 'en' ? 'zh-CN' : S.lang === 'zh-CN' ? 'zh-HK' : 'en';
-  const langLabel = S.lang === 'en' ? '简中' : S.lang === 'zh-CN' ? '繁中' : 'English';
-  const langAria = nextLang === 'zh-CN' ? 'Switch to Simplified Chinese (zh-CN)' : nextLang === 'zh-HK' ? '切换至繁体中文（香港）' : '切換至英文';
-  return [btn(langLabel, () => { S.lang = nextLang; savePref('gemini_lang', S.lang); applyPreferences(); render(); }, { id: 'language-toggle', 'aria-label': langAria }),
-    btn(icon(S.theme === 'dark' ? 'sun' : 'moon'), () => { S.theme = S.theme === 'dark' ? 'light' : 'dark'; savePref('gemini_theme', S.theme); render(); }, { id: 'theme-toggle', class: 'icon-button', 'aria-label': L('Toggle light / dark theme', '切換日間／夜間主題') })];
+  return [
+    btn(S.lang === 'zh-CN' ? 'EN' : '简中', () => { S.lang = S.lang === 'zh-CN' ? 'en' : 'zh-CN'; savePref('gemini_lang', S.lang); applyPreferences(); render(); }, { id: 'language-zh-cn', 'aria-label': S.lang === 'zh-CN' ? 'Switch to English' : '切换至简体中文' }),
+    btn(S.lang === 'en' ? '繁中' : 'English', () => { S.lang = S.lang === 'en' ? 'zh-HK' : 'en'; savePref('gemini_lang', S.lang); applyPreferences(); render(); }, { id: 'language-toggle', 'aria-label': L('Switch to Traditional Chinese (Hong Kong)', '切換至英文') }),
+    btn(icon(S.theme === 'dark' ? 'sun' : 'moon'), () => { S.theme = S.theme === 'dark' ? 'light' : 'dark'; savePref('gemini_theme', S.theme); render(); }, { id: 'theme-toggle', class: 'icon-button', 'aria-label': L('Toggle light / dark theme', '切換日間／夜間主題') }),
+  ];
 }
 function safeError(error) {
   const code = typeof error?.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(error.code) ? error.code : 'REQUEST_FAILED';
@@ -375,7 +375,7 @@ function autoRefreshControl() {
   return el('label', { class: 'check-label auto-refresh' }, el('input', { id: 'auto-refresh', type: 'checkbox', role: 'switch', checked: S.auto, onChange: event => { S.auto = event.target.checked; savePref('gemini_quota_auto', String(S.auto)); if (S.auto) S.nextAuto = 0; scheduleRefresh(); maybeAutoRefresh(); } }), L('Auto refresh every 5 min', '每 5 分鐘自動更新'));
 }
 function desktopNavigation() {
-  return el('nav', { class: 'daily-nav', 'aria-label': L('Main navigation', '主要導覽') }, ['accounts', 'audits', 'keys', 'settings'].map(navLink));
+  return el('nav', { class: 'daily-nav', 'aria-label': L('Main navigation', '主要導覽') }, ['accounts', 'keys', 'settings'].map(navLink));
 }
 function gatewayBaseUrl() { return location.protocol === 'file:' ? 'http://127.0.0.1:18989/v1' : `${location.origin}/v1`; }
 function render() {
@@ -385,6 +385,7 @@ function render() {
   const base = gatewayBaseUrl();
   const topbar = el('header', { class: 'topbar' }, brand(true), desktopNavigation(), el('div', { class: 'toolbar' },
     el('div', { class: 'endpoint-pill', id: 'topbar-endpoint' }, el('span', { class: 'live-dot', 'aria-hidden': true }), mono(base), btn(t('copy'), () => copy(base), { class: 'compact quiet', 'aria-label': L('Copy gateway Base URL', '複製閘道 Base URL') })),
+    btn([icon('audits'), t('audits')], () => goto('audits'), { id: 'shortcut-audits', class: `topbar-shortcut quiet${S.route === 'audits' ? ' is-active' : ''}` }),
     btn([icon('models'), L('Client setup', '客戶端設定')], () => goto('models'), { id: 'shortcut-models', class: `topbar-shortcut quiet${S.route === 'models' ? ' is-active' : ''}` }),
     btn([icon('playground'), t('playground')], () => goto('playground'), { id: 'shortcut-playground', class: `topbar-shortcut quiet${S.route === 'playground' ? ' is-active' : ''}` }),
     settingsDirty() && S.route !== 'settings' && link('settings', L('Unsaved settings draft', '有未儲存設定草稿'), { class: 'draft-indicator', id: 'settings-draft-indicator' }),

@@ -63,6 +63,7 @@
     "CONTRIBUTING.md",
     "CHANGELOG.md",
     "README.zh.md",
+    "README.zh-CN.md",
     "DISCLAIMER.md"
   ],
   "bin": {
