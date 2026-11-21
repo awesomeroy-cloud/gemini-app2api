@@ -157,9 +157,6 @@ Gemini AI Pro 账号实测 `GetUsageInfo` 参考数据（`neon_pro_policy`，非
 - 新增零依赖模块 `src/admin-v2/i18n-zh-cn.js`，覆盖管理台全部 700+ 中文文案与术语本地化（`网关`、`账号`、`密钥`、`会话`、`元数据`、`隐私`、`审计日志`等）。
 - 简体中文浏览器首次访问自动启用 `zh-CN`，顶栏提供 `简中` / `繁中` / `English` 快速切换。
 
-### 3. 上游自动同步工作流
-- `.github/workflows/sync-upstream.yml` 每日定时拉取 `ShawTim/gemini-app2api@main` 并执行 `git merge`（绝不覆盖或丢弃本 Fork 新增功能）；仅在全部测试与发布校验通过后推送 `main`，遇合并冲突自动回滚并创建 Issue 提示。
-
 ---
 
 ## 核心特性与架构对比

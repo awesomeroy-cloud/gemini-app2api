@@ -1,7 +1,14 @@
 /** Persistent SQLite request/response audit store (zero runtime dependencies, node:sqlite). */
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+let cachedDatabaseSync = null;
+function loadDatabaseSync() {
+  if (!cachedDatabaseSync) cachedDatabaseSync = require("node:sqlite").DatabaseSync;
+  return cachedDatabaseSync;
+}
 
 const MAX_REQUEST_BODY_BYTES = 256 * 1024;
 const MAX_REPLY_BYTES = 512 * 1024;
@@ -164,6 +171,7 @@ export class AuditStore {
     if (this.db) return this.db;
     try {
       if (this.directory) fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
+      const DatabaseSync = loadDatabaseSync();
       this.db = new DatabaseSync(this.dbPath);
       this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;");
       this.db.exec(SCHEMA);

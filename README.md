@@ -175,7 +175,6 @@ This fork adds a zero-dependency persistent request/response audit module powere
   - Right-side inspector drawer (`gw2api`-style) with summary KPI grid (`Status`, `Model / Served`, `Account`, `TTFB / Total`, `Tokens`, `Attempts / Tools`, `Issue / Finish`, `Req ID / Key FP`, `User-Agent`), `Blocks` / `MCP / Tools` / `Raw` tabs, Response-first / Request-below collapsible cards, role-colored left borders, DOM-safe Markdown rendering, and JSON syntax highlighting.
   - Admin endpoints protected by session cookie + exact `Origin` + CSRF: `GET /admin/api/audits` (`?models=1` for facets), `GET /admin/api/audits/:id`, `DELETE /admin/api/audits/:id`, and `DELETE /admin/api/audits`.
 - **Trilingual UI (`English` / `简体中文` / `繁體中文`):** Adds `src/admin-v2/i18n-zh-cn.js` covering all Admin V2 labels and messages with automatic `zh-CN` detection and a dedicated `简中` toggle in the top toolbar.
-- **Upstream Sync:** `.github/workflows/sync-upstream.yml` merges `ShawTim/gemini-app2api@main` daily without discarding fork features, pushing only when all verification tests pass and opening an issue on conflict.
 
 ![Gemini App2API Operations Console — Dark Theme (synthetic demo data)](docs/assets/admin-v2-demo-dark-desktop.png)
 

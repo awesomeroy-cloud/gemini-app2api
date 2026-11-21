@@ -64,6 +64,8 @@ export const productTests = Object.freeze([
   'test/gateway-transport.test.mjs',
   'test/openai-contract.test.mjs',
   'test/admin-v2-static.test.mjs',
+  'test/gateway-audit-store.test.mjs',
+  'test/i18n-zh-cn.test.mjs',
   'native-wire/test/native-provider.test.mjs',
   'native-wire/test/tool-protocol.test.mjs',
   'native-wire/test/oauth-loopback.test.mjs',

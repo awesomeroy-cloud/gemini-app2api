@@ -175,7 +175,6 @@ Gemini AI Pro 帳戶實測 `GetUsageInfo` 參考數據（`neon_pro_policy`，非
   - 點擊任意列開啟右側檢視抽屜：摘要 KV 網格（狀態、模型／實際服務、帳戶、TTFB／總耗時、Token、嘗試次數／工具數、異常／結束原因、請求 ID／金鑰指紋、User-Agent）、`內容塊`／`MCP / Tools`／`原始報文` 三頁籤、回應在上／請求在下之角色色條卡片、DOM 級 Markdown 排版與 JSON 語法高亮，支援匯出 JSON、單筆刪除與清空。
   - 管理 API（受會話 Cookie + Origin + CSRF 保護）：`GET /admin/api/audits`（`?models=1` 查詢維度）、`GET /admin/api/audits/:id`、`DELETE /admin/api/audits/:id`、`DELETE /admin/api/audits`。
 - **簡體中文語言包：** 新增 `src/admin-v2/i18n-zh-cn.js`，簡體中文瀏覽器自動啟用，頂欄提供 `简中` 一鍵切換。
-- **上游自動同步：** `.github/workflows/sync-upstream.yml` 每日自動合併 `ShawTim/gemini-app2api@main`，測試全過才推送且保留本 Fork 新增功能，遇衝突自動建 Issue 提示。
 
 ![Gemini App2API 維運管理台 —— 深色主題（合成示範資料）](docs/assets/admin-v2-demo-dark-desktop.png)
 
