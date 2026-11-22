@@ -2495,6 +2495,7 @@ dialog details > summary { cursor: pointer; min-height: 36px; display: list-item
 .chat-block--assistant { border-left-color: var(--teal); }
 .chat-block--user { border-left-color: var(--accent); }
 .chat-block--system { border-left-color: var(--amber); }
+.chat-block--thinking { border-left-color: var(--amber); }
 .chat-block--tool { border-left-color: var(--violet); }
 .chat-block__summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 11.5px; font-weight: 650; color: var(--muted); cursor: pointer; list-style: none; user-select: none; }
 .chat-block__summary::-webkit-details-marker { display: none; }
@@ -2532,3 +2533,13 @@ dialog details > summary { cursor: pointer; min-height: 36px; display: list-item
 .code-panel__head h3 { margin: 0; font-size: 12px; font-family: var(--mono); font-weight: 600; }
 .code-panel__body { padding: 10px 12px; }
 .code-panel__body pre { margin: 0; max-height: 360px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.55; background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
+.audit-citations { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; }
+.audit-citation { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--inset); text-decoration: none; color: var(--text); min-width: 0; transition: border-color 120ms ease, background 120ms ease; }
+.audit-citation:hover { background: var(--hover); border-color: var(--accent); }
+.audit-citation__idx { color: var(--accent); font-weight: 600; flex-shrink: 0; }
+.audit-citation__body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.audit-citation__title { font-size: 12px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-citation__url { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-failover-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.audit-failover-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--amber) 30%, var(--border)); background: var(--amber-bg); color: var(--amber); font-size: 11.5px; line-height: 1.35; }
+.audit-failover-chip__step { font-weight: 700; opacity: 0.85; }

@@ -12,6 +12,8 @@ function loadDatabaseSync() {
 
 const MAX_REQUEST_BODY_BYTES = 256 * 1024;
 const MAX_REPLY_BYTES = 512 * 1024;
+const MAX_REASONING_BYTES = 512 * 1024;
+const MAX_RENDERED_PROMPT_BYTES = 256 * 1024;
 const MAX_TOOL_CALLS_BYTES = 256 * 1024;
 const MAX_ERROR_BYTES = 64 * 1024;
 const PREVIEW_MAX_CHARS = 200;
@@ -51,7 +53,12 @@ CREATE TABLE IF NOT EXISTS audit_meta (
   error_preview   TEXT NOT NULL DEFAULT '',
   user_agent      TEXT NOT NULL DEFAULT '',
   raw_bytes       INTEGER NOT NULL DEFAULT 0,
-  raw_truncated   INTEGER NOT NULL DEFAULT 0
+  raw_truncated   INTEGER NOT NULL DEFAULT 0,
+  first_data_ms   INTEGER NOT NULL DEFAULT 0,
+  reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+  chunks          INTEGER NOT NULL DEFAULT 0,
+  frames          INTEGER NOT NULL DEFAULT 0,
+  thinking_level  INTEGER NOT NULL DEFAULT -1
 );
 CREATE INDEX IF NOT EXISTS idx_audit_meta_ts ON audit_meta(ts);
 CREATE INDEX IF NOT EXISTS idx_audit_meta_status ON audit_meta(status);
@@ -61,13 +68,20 @@ CREATE INDEX IF NOT EXISTS idx_audit_meta_issue ON audit_meta(issue);
 CREATE INDEX IF NOT EXISTS idx_audit_meta_path ON audit_meta(path);
 
 CREATE TABLE IF NOT EXISTS audit_body (
-  id           INTEGER PRIMARY KEY,
-  request_body TEXT NOT NULL DEFAULT '',
-  reply        TEXT NOT NULL DEFAULT '',
-  tool_calls   TEXT NOT NULL DEFAULT '',
-  error        TEXT NOT NULL DEFAULT '',
-  params       TEXT NOT NULL DEFAULT '',
-  req_headers  TEXT NOT NULL DEFAULT ''
+  id              INTEGER PRIMARY KEY,
+  request_body    TEXT NOT NULL DEFAULT '',
+  reply           TEXT NOT NULL DEFAULT '',
+  tool_calls      TEXT NOT NULL DEFAULT '',
+  error           TEXT NOT NULL DEFAULT '',
+  params          TEXT NOT NULL DEFAULT '',
+  req_headers     TEXT NOT NULL DEFAULT '',
+  reasoning       TEXT NOT NULL DEFAULT '',
+  res_headers     TEXT NOT NULL DEFAULT '',
+  rendered_prompt TEXT NOT NULL DEFAULT '',
+  annotations     TEXT NOT NULL DEFAULT '',
+  quota_snapshot  TEXT NOT NULL DEFAULT '',
+  failover_chain  TEXT NOT NULL DEFAULT '',
+  native_evidence TEXT NOT NULL DEFAULT ''
 );
 `;
 
@@ -96,6 +110,7 @@ export function sanitizeHeaders(headers) {
     const key = k.toLowerCase();
     if (SENSITIVE_HEADERS.has(key)) out[key] = "[REDACTED]";
     else if (typeof v === "string") out[key] = v.slice(0, 512);
+    else if (typeof v === "number") out[key] = String(v);
     else if (Array.isArray(v)) out[key] = v.map((s) => String(s).slice(0, 512)).join(", ");
   }
   return out;
@@ -175,6 +190,7 @@ export class AuditStore {
       this.db = new DatabaseSync(this.dbPath);
       this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;");
       this.db.exec(SCHEMA);
+      this._migrate();
       if (this.directory && fs.existsSync(this.dbPath)) {
         try { fs.chmodSync(this.dbPath, 0o600); } catch {}
       }
@@ -189,6 +205,34 @@ export class AuditStore {
     return this.db;
   }
 
+  _migrate() {
+    if (!this.db) return;
+    const ensureColumns = (table, cols) => {
+      const existing = new Set(this.db.prepare(`PRAGMA table_info(${table})`).all().map((r) => r.name));
+      for (const [name, ddl] of cols) {
+        if (!existing.has(name)) {
+          this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${ddl}`);
+        }
+      }
+    };
+    ensureColumns("audit_meta", [
+      ["first_data_ms", "INTEGER NOT NULL DEFAULT 0"],
+      ["reasoning_tokens", "INTEGER NOT NULL DEFAULT 0"],
+      ["chunks", "INTEGER NOT NULL DEFAULT 0"],
+      ["frames", "INTEGER NOT NULL DEFAULT 0"],
+      ["thinking_level", "INTEGER NOT NULL DEFAULT -1"],
+    ]);
+    ensureColumns("audit_body", [
+      ["reasoning", "TEXT NOT NULL DEFAULT ''"],
+      ["res_headers", "TEXT NOT NULL DEFAULT ''"],
+      ["rendered_prompt", "TEXT NOT NULL DEFAULT ''"],
+      ["annotations", "TEXT NOT NULL DEFAULT ''"],
+      ["quota_snapshot", "TEXT NOT NULL DEFAULT ''"],
+      ["failover_chain", "TEXT NOT NULL DEFAULT ''"],
+      ["native_evidence", "TEXT NOT NULL DEFAULT ''"],
+    ]);
+  }
+
   record(entry) {
     if (!this._open()) return null;
     try {
@@ -198,6 +242,13 @@ export class AuditStore {
       const reqCap = truncateUtf8(reqJson, MAX_REQUEST_BODY_BYTES);
       const replyStr = typeof entry.reply === "string" ? entry.reply : "";
       const replyCap = truncateUtf8(replyStr, MAX_REPLY_BYTES);
+      const reasoningStr = typeof entry.reasoning === "string" ? entry.reasoning : "";
+      const reasoningCap = truncateUtf8(reasoningStr, MAX_REASONING_BYTES);
+      const reasoningTokens = Number.isFinite(entry.reasoningTokens)
+        ? Math.max(0, Math.floor(Number(entry.reasoningTokens)))
+        : (reasoningStr ? Math.ceil(Buffer.byteLength(reasoningStr, "utf8") / 3.5) : 0);
+      const renderedPromptStr = typeof entry.renderedPrompt === "string" ? sanitizeBase64(entry.renderedPrompt) : "";
+      const renderedPromptCap = truncateUtf8(renderedPromptStr, MAX_RENDERED_PROMPT_BYTES);
       let toolsJson = "";
       try { toolsJson = Array.isArray(entry.toolCalls) && entry.toolCalls.length ? JSON.stringify(entry.toolCalls) : ""; } catch { toolsJson = ""; }
       const toolsCap = truncateUtf8(toolsJson, MAX_TOOL_CALLS_BYTES);
@@ -208,6 +259,21 @@ export class AuditStore {
       try { paramsJson = entry.params ? JSON.stringify(entry.params) : ""; } catch { paramsJson = ""; }
       let headersJson = "";
       try { headersJson = entry.reqHeaders ? JSON.stringify(sanitizeHeaders(entry.reqHeaders)) : ""; } catch { headersJson = ""; }
+      let resHeadersJson = "";
+      try { resHeadersJson = entry.resHeaders && Object.keys(entry.resHeaders).length ? JSON.stringify(sanitizeHeaders(entry.resHeaders)) : ""; } catch { resHeadersJson = ""; }
+      const resHeadersCap = truncateUtf8(resHeadersJson, MAX_ERROR_BYTES);
+      let annotationsJson = "";
+      try { annotationsJson = entry.annotations ? JSON.stringify(entry.annotations) : ""; } catch { annotationsJson = ""; }
+      const annotationsCap = truncateUtf8(annotationsJson, MAX_TOOL_CALLS_BYTES);
+      let quotaSnapshotJson = "";
+      try { quotaSnapshotJson = entry.quotaSnapshot ? JSON.stringify(entry.quotaSnapshot) : ""; } catch { quotaSnapshotJson = ""; }
+      const quotaSnapshotCap = truncateUtf8(quotaSnapshotJson, MAX_ERROR_BYTES);
+      let failoverChainJson = "";
+      try { failoverChainJson = Array.isArray(entry.failoverChain) && entry.failoverChain.length ? JSON.stringify(entry.failoverChain) : ""; } catch { failoverChainJson = ""; }
+      const failoverChainCap = truncateUtf8(failoverChainJson, MAX_ERROR_BYTES);
+      let nativeEvidenceJson = "";
+      try { nativeEvidenceJson = entry.nativeEvidence ? JSON.stringify(entry.nativeEvidence) : ""; } catch { nativeEvidenceJson = ""; }
+      const nativeEvidenceCap = truncateUtf8(nativeEvidenceJson, MAX_ERROR_BYTES);
 
       const reqPreview = entry.requestPreview || extractRequestPreview(entry.requestBody);
       let replyPreview = previewText(replyStr);
@@ -216,8 +282,9 @@ export class AuditStore {
         replyPreview = `[tool_calls: ${names}]`;
       }
       const errorPreview = previewText(entry.errorCode || (typeof entry.error === "string" ? entry.error : entry.error?.code || entry.error?.message || ""));
-      const rawBytes = reqCap.bytes + replyCap.bytes + toolsCap.bytes + errCap.bytes;
-      const rawTruncated = reqCap.truncated || replyCap.truncated || toolsCap.truncated || errCap.truncated ? 1 : 0;
+      const rawBytes = reqCap.bytes + replyCap.bytes + reasoningCap.bytes + renderedPromptCap.bytes + toolsCap.bytes + errCap.bytes + annotationsCap.bytes + quotaSnapshotCap.bytes + failoverChainCap.bytes + nativeEvidenceCap.bytes;
+      const rawTruncated = reqCap.truncated || replyCap.truncated || reasoningCap.truncated || renderedPromptCap.truncated || toolsCap.truncated || errCap.truncated || resHeadersCap.truncated || annotationsCap.truncated || quotaSnapshotCap.truncated || failoverChainCap.truncated || nativeEvidenceCap.truncated ? 1 : 0;
+      const thinkingLevel = Number.isSafeInteger(entry.thinkingLevel) ? entry.thinkingLevel : -1;
 
       this.db.exec("BEGIN");
       try {
@@ -226,12 +293,14 @@ export class AuditStore {
             req_id, ts, client_ip, method, path, model, served_model, stream, status, failed,
             ttfb_ms, total_ms, prompt_tokens, output_tokens, total_tokens, tool_call_count,
             attempts, account, key_fp, issue, finish_reason, request_preview, reply_preview,
-            error_preview, user_agent, raw_bytes, raw_truncated
+            error_preview, user_agent, raw_bytes, raw_truncated,
+            first_data_ms, reasoning_tokens, chunks, frames, thinking_level
           ) VALUES (
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?
+            ?, ?, ?, ?,
+            ?, ?, ?, ?, ?
           )
         `);
         const info = metaStmt.run(
@@ -262,12 +331,23 @@ export class AuditStore {
           String(entry.userAgent || "").slice(0, 256),
           rawBytes,
           rawTruncated,
+          Math.max(0, Math.floor(Number(entry.firstDataMs || 0))),
+          reasoningTokens,
+          Math.max(0, Math.floor(Number(entry.chunks || 0))),
+          Math.max(0, Math.floor(Number(entry.frames || 0))),
+          thinkingLevel,
         );
         const id = Number(info.lastInsertRowid);
         this.db.prepare(`
-          INSERT INTO audit_body (id, request_body, reply, tool_calls, error, params, req_headers)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(id, reqCap.text, replyCap.text, toolsCap.text, errCap.text, paramsJson, headersJson);
+          INSERT INTO audit_body (
+            id, request_body, reply, tool_calls, error, params, req_headers,
+            reasoning, res_headers, rendered_prompt, annotations, quota_snapshot, failover_chain, native_evidence
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          id, reqCap.text, replyCap.text, toolsCap.text, errCap.text, paramsJson, headersJson,
+          reasoningCap.text, resHeadersCap.text, renderedPromptCap.text, annotationsCap.text, quotaSnapshotCap.text, failoverChainCap.text, nativeEvidenceCap.text,
+        );
         this.db.exec("COMMIT");
         return id;
       } catch (innerErr) {

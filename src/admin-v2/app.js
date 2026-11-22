@@ -1600,12 +1600,14 @@ function renderSafeMarkdown(text) {
 }
 function auditBlockCard(block) {
   const bType = block.type || 'text';
-  const roleCls = bType === 'tool_call' || bType === 'tool_result'
+  const roleCls = bType === 'thinking'
+    ? 'chat-block--thinking'
+    : bType === 'tool_call' || bType === 'tool_result'
     ? 'chat-block--tool'
     : block.role === 'assistant' ? 'chat-block--assistant'
     : block.role === 'system' || block.role === 'developer' ? 'chat-block--system'
     : 'chat-block--user';
-  const metaNodes = [badge(bType)];
+  const metaNodes = [badge(bType, bType === 'thinking' ? 'amber' : '')];
   if (block.role) metaNodes.push(badge(block.role, block.role === 'assistant' ? 'teal' : block.role === 'system' || block.role === 'developer' ? 'amber' : ''));
   if (block.name) metaNodes.push(mono(block.name));
   const rawSource = block.text || block.args || '';
@@ -1713,6 +1715,46 @@ function extractAuditBlocks(d) {
   }
   return { resBlocks, reqBlocks, systemPrompt };
 }
+function extractAuditCitations(raw) {
+  if (!raw) return [];
+  let parsed = raw;
+  if (typeof raw === 'string') {
+    try { parsed = JSON.parse(raw); } catch { return []; }
+  }
+  if (!parsed || typeof parsed !== 'object') return [];
+  const rawList = [];
+  if (Array.isArray(parsed)) rawList.push(...parsed);
+  else {
+    if (Array.isArray(parsed.annotations)) rawList.push(...parsed.annotations);
+    if (Array.isArray(parsed.nativeSearch?.sources)) rawList.push(...parsed.nativeSearch.sources);
+  }
+  const seen = new Set();
+  const out = [];
+  for (const item of rawList) {
+    if (!item || typeof item !== 'object') continue;
+    const src = item.url_citation || item.web || item;
+    const rawUrl = typeof src.url === 'string' ? src.url : typeof src.uri === 'string' ? src.uri : '';
+    if (!rawUrl) continue;
+    let safeUrl = '';
+    try {
+      const u = new URL(rawUrl);
+      if (u.protocol === 'http:' || u.protocol === 'https:') safeUrl = u.href;
+    } catch { continue; }
+    if (!safeUrl || seen.has(safeUrl)) continue;
+    seen.add(safeUrl);
+    const title = typeof src.title === 'string' && src.title.trim() ? src.title.trim() : safeUrl;
+    out.push({ title, url: safeUrl });
+  }
+  return out;
+}
+function extractAuditFailoverChain(raw) {
+  if (!raw) return [];
+  let parsed = raw;
+  if (typeof raw === 'string') {
+    try { parsed = JSON.parse(raw); } catch { return []; }
+  }
+  return Array.isArray(parsed) ? parsed.filter(item => item && typeof item === 'object') : [];
+}
 function renderAuditDrawer() {
   const drawer = $('audit-drawer'), backdrop = $('audit-drawer-backdrop');
   if (!drawer || !backdrop) return;
@@ -1739,6 +1781,15 @@ function renderAuditDrawer() {
   const reqFormatted = prettyJsonText(d.request_body);
   const paramsFormatted = prettyJsonText(d.params);
   const headersFormatted = prettyJsonText(d.req_headers);
+  const resHeadersFormatted = prettyJsonText(d.res_headers);
+  const annotationsFormatted = prettyJsonText(d.annotations);
+  const quotaSnapshotFormatted = prettyJsonText(d.quota_snapshot);
+  const failoverChainFormatted = prettyJsonText(d.failover_chain);
+  const nativeEvidenceFormatted = prettyJsonText(d.native_evidence);
+  const reasoningText = typeof d.reasoning === 'string' ? d.reasoning : '';
+  const renderedPromptText = typeof d.rendered_prompt === 'string' ? d.rendered_prompt : '';
+  const citations = extractAuditCitations(d.annotations);
+  const failoverChain = extractAuditFailoverChain(d.failover_chain);
 
   const tabBar = el('div', { class: 'audit-tabs', role: 'tablist' }, [
     ['blocks', L(`Blocks (${resBlocks.length + reqBlocks.length})`, `內容塊 (${resBlocks.length + reqBlocks.length})`)],
@@ -1762,6 +1813,43 @@ function renderAuditDrawer() {
       ),
       resGroup,
     );
+
+    if (reasoningText.trim()) {
+      tabContent.push(
+        el('div', { class: 'audit-section-head' }, el('h3', { class: 'audit-subhead' }, L('Reasoning', '思考過程'))),
+        auditBlockCard({ type: 'thinking', role: 'assistant', text: reasoningText }),
+      );
+    }
+
+    if (citations.length) {
+      tabContent.push(
+        el('div', { class: 'audit-section-head' }, el('h3', { class: 'audit-subhead' }, L(`Citations (${citations.length})`, `聯網引用 (${citations.length})`))),
+        el('div', { class: 'audit-citations' }, ...citations.map((c, idx) =>
+          el('a', { class: 'audit-citation', href: c.url, target: '_blank', rel: 'noopener noreferrer' },
+            el('span', { class: 'audit-citation__idx mono' }, `[${idx + 1}]`),
+            el('span', { class: 'audit-citation__body' },
+              el('span', { class: 'audit-citation__title' }, c.title),
+              el('span', { class: 'audit-citation__url mono' }, c.url),
+            ),
+          ),
+        )),
+      );
+    }
+
+    if (failoverChain.length) {
+      tabContent.push(
+        el('div', { class: 'audit-section-head' }, el('h3', { class: 'audit-subhead' }, L(`Failover Chain (${failoverChain.length})`, `故障轉移鏈路 (${failoverChain.length})`))),
+        el('div', { class: 'audit-failover-list' }, ...failoverChain.map((step, idx) => {
+          const parts = [step.accountId || '-'];
+          if (step.status !== undefined && step.status !== null && step.status !== '') parts.push(`HTTP ${step.status}`);
+          if (step.code) parts.push(String(step.code));
+          return el('span', { class: 'audit-failover-chip mono' },
+            el('span', { class: 'audit-failover-chip__step' }, `#${idx + 1}`),
+            parts.join(' · '),
+          );
+        })),
+      );
+    }
 
     const reqGroup = el('div', { class: 'audit-blocks-group' }, ...(reqBlocks.length ? reqBlocks.map(auditBlockCard) : [el('p', { class: 'muted', style: 'font-size:12px' }, L('No request blocks extracted', '未提取到請求塊'))]));
     tabContent.push(
@@ -1787,10 +1875,17 @@ function renderAuditDrawer() {
       tabContent.push(notice(L(`Note: payload was truncated (${humanBytes(d.raw_bytes)})`, `注意：部分報文已被截斷存儲（raw_bytes=${humanBytes(d.raw_bytes)}）`), 'amber'));
     }
     tabContent.push(
+      ...(resHeadersFormatted ? [auditCodePanel('res_headers', resHeadersFormatted)] : []),
       auditCodePanel('req_headers', headersFormatted),
       auditCodePanel('params', paramsFormatted),
       auditCodePanel('request_body', reqFormatted),
+      ...(renderedPromptText ? [auditCodePanel('rendered_prompt', renderedPromptText)] : []),
       auditCodePanel('reply', d.reply || ''),
+      ...(reasoningText ? [auditCodePanel('reasoning', reasoningText)] : []),
+      ...(annotationsFormatted ? [auditCodePanel('annotations', annotationsFormatted)] : []),
+      ...(quotaSnapshotFormatted ? [auditCodePanel('quota_snapshot', quotaSnapshotFormatted)] : []),
+      ...(failoverChainFormatted ? [auditCodePanel('failover_chain', failoverChainFormatted)] : []),
+      ...(nativeEvidenceFormatted ? [auditCodePanel('native_evidence', nativeEvidenceFormatted)] : []),
       ...(errFormatted ? [auditCodePanel('error', errFormatted)] : []),
     );
   }
@@ -1812,9 +1907,10 @@ function renderAuditDrawer() {
         ['Status', String(d.status ?? 0)],
         ['Model', modelText],
         ['Account / Proxy', `${d.account || '-'} / direct`],
-        ['TTFB / Total', `${duration(d.ttfb_ms)} / ${duration(d.total_ms)}`],
-        ['Tokens (P/O/Total)', `${num(d.prompt_tokens)} / ${num(d.output_tokens)} / ${num(d.total_tokens)}`],
-        ['Attempts / Tools', `${num(d.attempts)} / ${num(d.tool_call_count)}`],
+        ['TTFB / 1st / Total', `${duration(d.ttfb_ms)} / ${duration(d.first_data_ms)} / ${duration(d.total_ms)}`],
+        ['Tokens (P/O/R/Total)', `${num(d.prompt_tokens)} / ${num(d.output_tokens)} / ${num(d.reasoning_tokens)} / ${num(d.total_tokens)}`],
+        ['Attempts / Frames / Chunks', `${num(d.attempts)} / ${num(d.frames)} / ${num(d.chunks)}`],
+        ['Thinking / Tools', `${finite(d.thinking_level) && d.thinking_level >= 0 ? d.thinking_level : '-'} / ${num(d.tool_call_count)}`],
         ['Issue / Finish', `${d.issue || '-'} / ${d.finish_reason || '-'}`],
         ['Resp ID / Key FP', `${d.req_id || '-'} / ${d.key_fp || '-'}`],
         ['User-Agent', d.user_agent || '-'],

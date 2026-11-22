@@ -398,7 +398,7 @@ export function createGateway({
     req,
     res,
     body,
-    { owner, route, playground = false, accountTestId = null } = {},
+    { owner, route, playground = false, accountTestId = null, onEnterExecute = null } = {},
   ) {
     if (req.aborted || res.destroyed) return;
     const canonical =
@@ -449,6 +449,7 @@ export function createGateway({
     inFlightTasks.add(inFlightPromise);
     active++;
     totalRequests++;
+    onEnterExecute?.();
     const id = "req_" + crypto.randomUUID(),
       at = Date.now();
     let accountId = null,
@@ -467,6 +468,13 @@ export function createGateway({
     let capturedReply = "";
     let capturedToolCalls = [];
     let capturedError = null;
+    let capturedThoughts = "";
+    let capturedRenderedPrompt = "";
+    let capturedAnnotations = null;
+    let capturedNativeSearch = null;
+    let capturedQuota = null;
+    let resolvedThinkingLevel = null;
+    let framesCount = 0;
     let servedModel = "";
     const providerFailures = [];
     let diagnostic = null;
@@ -500,7 +508,7 @@ export function createGateway({
           if (context.failoverReason) res.setHeader("X-Gemini-Failover-Reason", context.failoverReason);
         }
         try { return await provider.runTurn(acc, canonical, event => {
-          if (firstByteAt === null && (event?.text || event?.delta || event?.calls?.length || event?.call)) firstByteAt = Date.now();
+          if (firstByteAt === null && (event?.content || event?.text || event?.delta || event?.calls?.length || event?.call)) firstByteAt = Date.now();
           return delivery.accept(event);
         }, { ...context, timeoutMs: settings.timeoutMs,
           incrementalOutput: true, outputMode: outputStreaming ? 'stream' : 'buffered',
@@ -531,6 +539,13 @@ export function createGateway({
       if (firstByteAt === null) firstByteAt = Date.now();
       capturedReply = typeof result.content === "string" ? result.content : "";
       capturedToolCalls = Array.isArray(result.calls) ? result.calls : [];
+      capturedThoughts = typeof result.thoughts === "string" ? result.thoughts : "";
+      capturedRenderedPrompt = typeof result.renderedPrompt === "string" ? result.renderedPrompt : "";
+      capturedAnnotations = Array.isArray(result.annotations) && result.annotations.length ? result.annotations : null;
+      capturedNativeSearch = result.nativeSearch || null;
+      capturedQuota = result.quotaObservation || null;
+      resolvedThinkingLevel = Number.isSafeInteger(result.thinkingLevel) ? result.thinkingLevel : null;
+      framesCount = Number.isSafeInteger(result.frames) ? result.frames : (Number.isSafeInteger(result.nativeEvidence?.frameCount) ? result.nativeEvidence.frameCount : 0);
       servedModel = result.attribution || (Number.isSafeInteger(result.resolvedModeCategory) ? `mode:${result.resolvedModeCategory}` : "");
       nativeEvidence = safeNativeEvidence(result.nativeEvidence);
       try {
@@ -571,6 +586,11 @@ export function createGateway({
       capturedError = { ...errorPayload(error).error, ...(nativeEvidence ? { nativeEvidence } : {}) };
       if (!capturedReply && typeof error.partialResult?.content === "string") capturedReply = error.partialResult.content;
       if (!capturedToolCalls.length && Array.isArray(error.partialResult?.calls)) capturedToolCalls = error.partialResult.calls;
+      if (!capturedThoughts) capturedThoughts = typeof error.partialResult?.thoughts === "string" ? error.partialResult.thoughts : (typeof error.thoughts === "string" ? error.thoughts : "");
+      if (!capturedRenderedPrompt) capturedRenderedPrompt = typeof error.partialResult?.renderedPrompt === "string" ? error.partialResult.renderedPrompt : (typeof error.renderedPrompt === "string" ? error.renderedPrompt : "");
+      if (resolvedThinkingLevel === null && Number.isSafeInteger(error.partialResult?.thinkingLevel)) resolvedThinkingLevel = error.partialResult.thinkingLevel;
+      else if (resolvedThinkingLevel === null && Number.isSafeInteger(nativeEvidence?.observedThinking)) resolvedThinkingLevel = nativeEvidence.observedThinking;
+      if (!framesCount) framesCount = Number.isSafeInteger(error.partialResult?.frames) ? error.partialResult.frames : (Number.isSafeInteger(nativeEvidence?.frameCount) ? nativeEvidence.frameCount : 0);
       toolCalls = delivery.callCount;
       totalErrors++;
       // Internal attempts have finished. Do not turn an empty failed operation into
@@ -643,6 +663,8 @@ export function createGateway({
       try {
         const totalMs = Date.now() - at;
         const ttfbMs = firstByteAt !== null ? Math.max(0, firstByteAt - at) : totalMs;
+        const firstDataMs = delivery.firstDataAt !== null ? Math.max(0, delivery.firstDataAt - at) : 0;
+        const chunks = delivery.chunkCount;
         const reqPath = accountTestId ? "/admin/api/accounts/test" : playground
           ? "/admin/api/playground"
           : `/v1/${route === "responses" ? "responses" : "chat/completions"}`;
@@ -652,6 +674,11 @@ export function createGateway({
           outputBytes: Buffer.byteLength(capturedReply, "utf8"),
         });
         const finishReason = status >= 400 ? "error" : outputIncomplete ? "incomplete" : capturedToolCalls.length ? "tool_calls" : "stop";
+        let resHeaders = null;
+        try { resHeaders = res.getHeaders?.() ?? null; } catch {}
+        const annotationsPayload = (capturedNativeSearch || capturedAnnotations)
+          ? { ...(capturedNativeSearch ? { nativeSearch: capturedNativeSearch } : {}), ...(capturedAnnotations ? { annotations: capturedAnnotations } : {}) }
+          : null;
         auditStore.record({
           reqId: id,
           ts: at,
@@ -664,12 +691,16 @@ export function createGateway({
           status,
           failed: status >= 400 || Boolean(errorCode),
           ttfbMs,
+          firstDataMs,
           totalMs,
           promptTokens: usage.prompt_tokens,
           outputTokens: usage.completion_tokens,
           totalTokens: usage.total_tokens,
           toolCallCount: toolCalls,
           attempts: providerAttempts,
+          chunks,
+          frames: framesCount,
+          thinkingLevel: resolvedThinkingLevel,
           account: accountLabel,
           keyFp: owner || "",
           issue: errorCode || (outputIncomplete ? "incomplete" : ""),
@@ -677,6 +708,8 @@ export function createGateway({
           userAgent: req.headers?.["user-agent"] || "",
           requestBody: body,
           reply: capturedReply,
+          reasoning: capturedThoughts,
+          renderedPrompt: capturedRenderedPrompt,
           toolCalls: capturedToolCalls,
           error: capturedError || (nativeEvidence && status >= 400 ? { nativeEvidence } : null),
           errorCode,
@@ -693,6 +726,11 @@ export function createGateway({
             ...(nativeResponseRevisions !== null ? { nativeResponseRevisions } : {}),
           },
           reqHeaders: req.headers,
+          resHeaders,
+          annotations: annotationsPayload,
+          quotaSnapshot: capturedQuota,
+          failoverChain: providerFailures.length ? providerFailures : null,
+          nativeEvidence,
         });
       } catch { /* Audit persistence must never fail or disrupt requests. */ }
       inFlightTasks.delete(inFlightPromise);
@@ -700,6 +738,10 @@ export function createGateway({
     }
   }
   const server = http.createServer(async (req, res) => {
+    const reqStartedAt = Date.now();
+    let enteredExecute = false;
+    let parsedBody = null;
+    let apiOwner = "";
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Referrer-Policy", "no-referrer");
@@ -1091,6 +1133,7 @@ export function createGateway({
       }
       if (p.startsWith("/v1/")) {
         const owner = security.apiOwner(req);
+        apiOwner = owner;
         if (url.search) throw fault("UNSUPPORTED_QUERY_PARAMETER");
         if (p === "/v1/models" && req.method === "GET") {
           const contextWindows = {
@@ -1116,17 +1159,19 @@ export function createGateway({
           ["/v1/chat/completions", "/v1/responses"].includes(p)
         ) {
           const body = await readJson(req, store.settings().maxBodyBytes);
+          parsedBody = body;
           if (req.aborted || res.destroyed) return;
           const route = p.endsWith('responses') ? 'responses' : 'chat';
+          const markEntered = () => { enteredExecute = true; };
           if (allowAutomaticRecovery) {
             const canonical = route === 'responses' ? protocol.normalizeResponsesRequest(body).body : protocol.normalizeChatRequest(body);
             const { sessionId } = resolveSessionIdentity(req.headers, canonical);
             if (sessionId !== undefined) return await resumption.run({ req, res, owner, sessionId, route, body }, async (input, output) => {
-              try { await execute(input, output, body, { owner, route }); }
+              try { await execute(input, output, body, { owner, route, onEnterExecute: markEntered }); }
               catch (error) { if (output.headersSent) { output.incomplete = true; output.end(); } else { output.discard(); json(output, errorPayload(error), Number.isInteger(error.status) ? error.status : 500); } }
             });
           }
-          return await execute(req, res, body, { owner, route });
+          return await execute(req, res, body, { owner, route, onEnterExecute: markEntered });
         }
         throw fault("UNSUPPORTED_ENDPOINT", 404);
       }
@@ -1139,8 +1184,39 @@ export function createGateway({
         error.status <= 599
           ? error.status
           : 500;
-      if (!res.headersSent) json(res, errorPayload(error), status);
+      const errBody = errorPayload(error);
+      if (!res.headersSent) json(res, errBody, status);
       else res.end();
+      if (!enteredExecute && typeof req.url === "string" && req.url.startsWith("/v1/")) {
+        try {
+          let reqPath = req.url;
+          try { reqPath = new URL(req.url, origin || "http://localhost").pathname; } catch {}
+          let resHeaders = null;
+          try { resHeaders = res.getHeaders?.() ?? null; } catch {}
+          const totalMs = Math.max(0, Date.now() - reqStartedAt);
+          auditStore.record({
+            ts: reqStartedAt,
+            clientIp: extractClientIp(req),
+            method: req.method || "POST",
+            path: reqPath,
+            model: typeof parsedBody?.model === "string" ? parsedBody.model : "",
+            stream: parsedBody?.stream === true,
+            status,
+            failed: true,
+            ttfbMs: totalMs,
+            totalMs,
+            keyFp: apiOwner || "",
+            issue: errBody.error.code,
+            finishReason: "error",
+            userAgent: req.headers?.["user-agent"] || "",
+            requestBody: parsedBody,
+            error: errBody.error,
+            errorCode: errBody.error.code,
+            reqHeaders: req.headers,
+            resHeaders,
+          });
+        } catch { /* Audit persistence must never fail or disrupt requests. */ }
+      }
     }
   });
   server.requestTimeout = 30000;

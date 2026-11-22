@@ -66,6 +66,7 @@ export function createResponseDelivery(res, { route = 'chat', stream = false, in
     requestedThinkingLevel: thinkingLevel, ...(reasoningEffort === undefined ? {} : { requestedReasoningEffort: reasoningEffort }) };
   let started = false, settled = false, content = '', calls = [], bytes = 0, sequence = 0, message = null;
   let publishedLength = 0, publishedBytes = 0;
+  let firstDataAt = null, chunkCount = 0;
   let keepaliveTimer = null;
   const stopKeepalive = () => {
     if (keepaliveTimer !== null) {
@@ -97,6 +98,8 @@ export function createResponseDelivery(res, { route = 'chat', stream = false, in
   const estimateUsage = (outputBytes = bytes) => estimateTokenUsage({ promptChars, outputBytes });
   const output = [];
   const sendWire = async chunk => {
+    if (firstDataAt === null) firstDataAt = Date.now();
+    chunkCount++;
     await write(res, chunk, signal, writeTimeoutMs);
     armKeepalive();
   };
@@ -232,6 +235,8 @@ export function createResponseDelivery(res, { route = 'chat', stream = false, in
         resultCalls.reduce((total, call) => total + Buffer.byteLength(JSON.stringify(call)), 0);
       if (resultCalls.length > 32 || outputBytes > MAX) throw fault('RESPONSE_TOO_LARGE', 502);
       settled = true;
+      if (firstDataAt === null) firstDataAt = Date.now();
+      chunkCount = 1;
       (route === 'responses' ? writeResponsesResponse : writeChatResponse)(res, { ...result, parallelToolCalls, usage: estimateUsage(outputBytes) });
       return;
     }
@@ -285,6 +290,8 @@ export function createResponseDelivery(res, { route = 'chat', stream = false, in
     res.incomplete = true;
     if (!stream) {
       settled = true;
+      if (firstDataAt === null) firstDataAt = Date.now();
+      chunkCount = 1;
       (route === 'responses' ? writeResponsesResponse : writeChatResponse)(res, { ...partial, calls: partialCalls, parallelToolCalls, incomplete: true, incompleteDetails: { reason: 'upstream_interrupted', code: detail.code }, outputError: detail });
       return true;
     }
@@ -335,6 +342,8 @@ export function createResponseDelivery(res, { route = 'chat', stream = false, in
     get hasContent() { return content.length > 0 || calls.length > 0; },
     get callCount() { return calls.length; },
     get publishedBytes() { return publishedBytes; },
+    get firstDataAt() { return firstDataAt; },
+    get chunkCount() { return chunkCount; },
     // A fragment, not an empty or quota failure: some text arrived but the
     // caller has seen nothing usable, so replacing it splices nothing.
     get retryableShortfall() { return !settled && calls.length === 0 && publishedBytes === 0 && bytes > 0 && bytes < PREFIX_BYTES; } };
