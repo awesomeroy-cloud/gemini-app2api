@@ -468,11 +468,9 @@ export function createGateway({
     let capturedReply = "";
     let capturedToolCalls = [];
     let capturedError = null;
-    let capturedThoughts = "";
     let capturedRenderedPrompt = "";
     let capturedAnnotations = null;
     let capturedNativeSearch = null;
-    let capturedQuota = null;
     let resolvedThinkingLevel = null;
     let framesCount = 0;
     let servedModel = "";
@@ -539,11 +537,9 @@ export function createGateway({
       if (firstByteAt === null) firstByteAt = Date.now();
       capturedReply = typeof result.content === "string" ? result.content : "";
       capturedToolCalls = Array.isArray(result.calls) ? result.calls : [];
-      capturedThoughts = typeof result.thoughts === "string" ? result.thoughts : "";
       capturedRenderedPrompt = typeof result.renderedPrompt === "string" ? result.renderedPrompt : "";
       capturedAnnotations = Array.isArray(result.annotations) && result.annotations.length ? result.annotations : null;
       capturedNativeSearch = result.nativeSearch || null;
-      capturedQuota = result.quotaObservation || null;
       resolvedThinkingLevel = Number.isSafeInteger(result.thinkingLevel) ? result.thinkingLevel : null;
       framesCount = Number.isSafeInteger(result.frames) ? result.frames : (Number.isSafeInteger(result.nativeEvidence?.frameCount) ? result.nativeEvidence.frameCount : 0);
       servedModel = result.attribution || (Number.isSafeInteger(result.resolvedModeCategory) ? `mode:${result.resolvedModeCategory}` : "");
@@ -586,7 +582,6 @@ export function createGateway({
       capturedError = { ...errorPayload(error).error, ...(nativeEvidence ? { nativeEvidence } : {}) };
       if (!capturedReply && typeof error.partialResult?.content === "string") capturedReply = error.partialResult.content;
       if (!capturedToolCalls.length && Array.isArray(error.partialResult?.calls)) capturedToolCalls = error.partialResult.calls;
-      if (!capturedThoughts) capturedThoughts = typeof error.partialResult?.thoughts === "string" ? error.partialResult.thoughts : (typeof error.thoughts === "string" ? error.thoughts : "");
       if (!capturedRenderedPrompt) capturedRenderedPrompt = typeof error.partialResult?.renderedPrompt === "string" ? error.partialResult.renderedPrompt : (typeof error.renderedPrompt === "string" ? error.renderedPrompt : "");
       if (resolvedThinkingLevel === null && Number.isSafeInteger(error.partialResult?.thinkingLevel)) resolvedThinkingLevel = error.partialResult.thinkingLevel;
       else if (resolvedThinkingLevel === null && Number.isSafeInteger(nativeEvidence?.observedThinking)) resolvedThinkingLevel = nativeEvidence.observedThinking;
@@ -708,7 +703,6 @@ export function createGateway({
           userAgent: req.headers?.["user-agent"] || "",
           requestBody: body,
           reply: capturedReply,
-          reasoning: capturedThoughts,
           renderedPrompt: capturedRenderedPrompt,
           toolCalls: capturedToolCalls,
           error: capturedError || (nativeEvidence && status >= 400 ? { nativeEvidence } : null),
@@ -728,7 +722,6 @@ export function createGateway({
           reqHeaders: req.headers,
           resHeaders,
           annotations: annotationsPayload,
-          quotaSnapshot: capturedQuota,
           failoverChain: providerFailures.length ? providerFailures : null,
           nativeEvidence,
         });

@@ -1600,14 +1600,12 @@ function renderSafeMarkdown(text) {
 }
 function auditBlockCard(block) {
   const bType = block.type || 'text';
-  const roleCls = bType === 'thinking'
-    ? 'chat-block--thinking'
-    : bType === 'tool_call' || bType === 'tool_result'
+  const roleCls = bType === 'tool_call' || bType === 'tool_result'
     ? 'chat-block--tool'
     : block.role === 'assistant' ? 'chat-block--assistant'
     : block.role === 'system' || block.role === 'developer' ? 'chat-block--system'
     : 'chat-block--user';
-  const metaNodes = [badge(bType, bType === 'thinking' ? 'amber' : '')];
+  const metaNodes = [badge(bType, '')];
   if (block.role) metaNodes.push(badge(block.role, block.role === 'assistant' ? 'teal' : block.role === 'system' || block.role === 'developer' ? 'amber' : ''));
   if (block.name) metaNodes.push(mono(block.name));
   const rawSource = block.text || block.args || '';
@@ -1783,10 +1781,8 @@ function renderAuditDrawer() {
   const headersFormatted = prettyJsonText(d.req_headers);
   const resHeadersFormatted = prettyJsonText(d.res_headers);
   const annotationsFormatted = prettyJsonText(d.annotations);
-  const quotaSnapshotFormatted = prettyJsonText(d.quota_snapshot);
   const failoverChainFormatted = prettyJsonText(d.failover_chain);
   const nativeEvidenceFormatted = prettyJsonText(d.native_evidence);
-  const reasoningText = typeof d.reasoning === 'string' ? d.reasoning : '';
   const renderedPromptText = typeof d.rendered_prompt === 'string' ? d.rendered_prompt : '';
   const citations = extractAuditCitations(d.annotations);
   const failoverChain = extractAuditFailoverChain(d.failover_chain);
@@ -1813,13 +1809,6 @@ function renderAuditDrawer() {
       ),
       resGroup,
     );
-
-    if (reasoningText.trim()) {
-      tabContent.push(
-        el('div', { class: 'audit-section-head' }, el('h3', { class: 'audit-subhead' }, L('Reasoning', '思考過程'))),
-        auditBlockCard({ type: 'thinking', role: 'assistant', text: reasoningText }),
-      );
-    }
 
     if (citations.length) {
       tabContent.push(
@@ -1881,9 +1870,7 @@ function renderAuditDrawer() {
       auditCodePanel('request_body', reqFormatted),
       ...(renderedPromptText ? [auditCodePanel('rendered_prompt', renderedPromptText)] : []),
       auditCodePanel('reply', d.reply || ''),
-      ...(reasoningText ? [auditCodePanel('reasoning', reasoningText)] : []),
       ...(annotationsFormatted ? [auditCodePanel('annotations', annotationsFormatted)] : []),
-      ...(quotaSnapshotFormatted ? [auditCodePanel('quota_snapshot', quotaSnapshotFormatted)] : []),
       ...(failoverChainFormatted ? [auditCodePanel('failover_chain', failoverChainFormatted)] : []),
       ...(nativeEvidenceFormatted ? [auditCodePanel('native_evidence', nativeEvidenceFormatted)] : []),
       ...(errFormatted ? [auditCodePanel('error', errFormatted)] : []),
@@ -1908,7 +1895,7 @@ function renderAuditDrawer() {
         ['Model', modelText],
         ['Account / Proxy', `${d.account || '-'} / direct`],
         ['TTFB / 1st / Total', `${duration(d.ttfb_ms)} / ${duration(d.first_data_ms)} / ${duration(d.total_ms)}`],
-        ['Tokens (P/O/R/Total)', `${num(d.prompt_tokens)} / ${num(d.output_tokens)} / ${num(d.reasoning_tokens)} / ${num(d.total_tokens)}`],
+        ['Tokens (P/O/Total)', `${num(d.prompt_tokens)} / ${num(d.output_tokens)} / ${num(d.total_tokens)}`],
         ['Attempts / Frames / Chunks', `${num(d.attempts)} / ${num(d.frames)} / ${num(d.chunks)}`],
         ['Thinking / Tools', `${finite(d.thinking_level) && d.thinking_level >= 0 ? d.thinking_level : '-'} / ${num(d.tool_call_count)}`],
         ['Issue / Finish', `${d.issue || '-'} / ${d.finish_reason || '-'}`],

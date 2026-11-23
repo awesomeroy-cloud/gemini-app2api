@@ -8,6 +8,7 @@ class SharedResponse extends EventEmitter {
   headers = {}; headersSent = false; writableEnded = false; statusCode = 200;
   chunks = []; bytes = 0; incomplete = false; subscribers = new Set();
   setHeader(name, value) { this.headers[name.toLowerCase()] = String(value); }
+  getHeaders() { return { ...this.headers }; }
   #head(sink) {
     if (sink.started || sink.res.destroyed || !this.headersSent) return;
     sink.res.setHeader('X-Gemini-Request-Resumed', String(sink.resumed));

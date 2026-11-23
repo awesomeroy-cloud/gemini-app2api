@@ -12,7 +12,6 @@ function loadDatabaseSync() {
 
 const MAX_REQUEST_BODY_BYTES = 256 * 1024;
 const MAX_REPLY_BYTES = 512 * 1024;
-const MAX_REASONING_BYTES = 512 * 1024;
 const MAX_RENDERED_PROMPT_BYTES = 256 * 1024;
 const MAX_TOOL_CALLS_BYTES = 256 * 1024;
 const MAX_ERROR_BYTES = 64 * 1024;
@@ -55,7 +54,6 @@ CREATE TABLE IF NOT EXISTS audit_meta (
   raw_bytes       INTEGER NOT NULL DEFAULT 0,
   raw_truncated   INTEGER NOT NULL DEFAULT 0,
   first_data_ms   INTEGER NOT NULL DEFAULT 0,
-  reasoning_tokens INTEGER NOT NULL DEFAULT 0,
   chunks          INTEGER NOT NULL DEFAULT 0,
   frames          INTEGER NOT NULL DEFAULT 0,
   thinking_level  INTEGER NOT NULL DEFAULT -1
@@ -75,11 +73,9 @@ CREATE TABLE IF NOT EXISTS audit_body (
   error           TEXT NOT NULL DEFAULT '',
   params          TEXT NOT NULL DEFAULT '',
   req_headers     TEXT NOT NULL DEFAULT '',
-  reasoning       TEXT NOT NULL DEFAULT '',
   res_headers     TEXT NOT NULL DEFAULT '',
   rendered_prompt TEXT NOT NULL DEFAULT '',
   annotations     TEXT NOT NULL DEFAULT '',
-  quota_snapshot  TEXT NOT NULL DEFAULT '',
   failover_chain  TEXT NOT NULL DEFAULT '',
   native_evidence TEXT NOT NULL DEFAULT ''
 );
@@ -217,17 +213,14 @@ export class AuditStore {
     };
     ensureColumns("audit_meta", [
       ["first_data_ms", "INTEGER NOT NULL DEFAULT 0"],
-      ["reasoning_tokens", "INTEGER NOT NULL DEFAULT 0"],
       ["chunks", "INTEGER NOT NULL DEFAULT 0"],
       ["frames", "INTEGER NOT NULL DEFAULT 0"],
       ["thinking_level", "INTEGER NOT NULL DEFAULT -1"],
     ]);
     ensureColumns("audit_body", [
-      ["reasoning", "TEXT NOT NULL DEFAULT ''"],
       ["res_headers", "TEXT NOT NULL DEFAULT ''"],
       ["rendered_prompt", "TEXT NOT NULL DEFAULT ''"],
       ["annotations", "TEXT NOT NULL DEFAULT ''"],
-      ["quota_snapshot", "TEXT NOT NULL DEFAULT ''"],
       ["failover_chain", "TEXT NOT NULL DEFAULT ''"],
       ["native_evidence", "TEXT NOT NULL DEFAULT ''"],
     ]);
@@ -242,11 +235,6 @@ export class AuditStore {
       const reqCap = truncateUtf8(reqJson, MAX_REQUEST_BODY_BYTES);
       const replyStr = typeof entry.reply === "string" ? entry.reply : "";
       const replyCap = truncateUtf8(replyStr, MAX_REPLY_BYTES);
-      const reasoningStr = typeof entry.reasoning === "string" ? entry.reasoning : "";
-      const reasoningCap = truncateUtf8(reasoningStr, MAX_REASONING_BYTES);
-      const reasoningTokens = Number.isFinite(entry.reasoningTokens)
-        ? Math.max(0, Math.floor(Number(entry.reasoningTokens)))
-        : (reasoningStr ? Math.ceil(Buffer.byteLength(reasoningStr, "utf8") / 3.5) : 0);
       const renderedPromptStr = typeof entry.renderedPrompt === "string" ? sanitizeBase64(entry.renderedPrompt) : "";
       const renderedPromptCap = truncateUtf8(renderedPromptStr, MAX_RENDERED_PROMPT_BYTES);
       let toolsJson = "";
@@ -265,9 +253,6 @@ export class AuditStore {
       let annotationsJson = "";
       try { annotationsJson = entry.annotations ? JSON.stringify(entry.annotations) : ""; } catch { annotationsJson = ""; }
       const annotationsCap = truncateUtf8(annotationsJson, MAX_TOOL_CALLS_BYTES);
-      let quotaSnapshotJson = "";
-      try { quotaSnapshotJson = entry.quotaSnapshot ? JSON.stringify(entry.quotaSnapshot) : ""; } catch { quotaSnapshotJson = ""; }
-      const quotaSnapshotCap = truncateUtf8(quotaSnapshotJson, MAX_ERROR_BYTES);
       let failoverChainJson = "";
       try { failoverChainJson = Array.isArray(entry.failoverChain) && entry.failoverChain.length ? JSON.stringify(entry.failoverChain) : ""; } catch { failoverChainJson = ""; }
       const failoverChainCap = truncateUtf8(failoverChainJson, MAX_ERROR_BYTES);
@@ -282,8 +267,8 @@ export class AuditStore {
         replyPreview = `[tool_calls: ${names}]`;
       }
       const errorPreview = previewText(entry.errorCode || (typeof entry.error === "string" ? entry.error : entry.error?.code || entry.error?.message || ""));
-      const rawBytes = reqCap.bytes + replyCap.bytes + reasoningCap.bytes + renderedPromptCap.bytes + toolsCap.bytes + errCap.bytes + annotationsCap.bytes + quotaSnapshotCap.bytes + failoverChainCap.bytes + nativeEvidenceCap.bytes;
-      const rawTruncated = reqCap.truncated || replyCap.truncated || reasoningCap.truncated || renderedPromptCap.truncated || toolsCap.truncated || errCap.truncated || resHeadersCap.truncated || annotationsCap.truncated || quotaSnapshotCap.truncated || failoverChainCap.truncated || nativeEvidenceCap.truncated ? 1 : 0;
+      const rawBytes = reqCap.bytes + replyCap.bytes + renderedPromptCap.bytes + toolsCap.bytes + errCap.bytes + annotationsCap.bytes + failoverChainCap.bytes + nativeEvidenceCap.bytes;
+      const rawTruncated = reqCap.truncated || replyCap.truncated || renderedPromptCap.truncated || toolsCap.truncated || errCap.truncated || resHeadersCap.truncated || annotationsCap.truncated || failoverChainCap.truncated || nativeEvidenceCap.truncated ? 1 : 0;
       const thinkingLevel = Number.isSafeInteger(entry.thinkingLevel) ? entry.thinkingLevel : -1;
 
       this.db.exec("BEGIN");
@@ -294,13 +279,13 @@ export class AuditStore {
             ttfb_ms, total_ms, prompt_tokens, output_tokens, total_tokens, tool_call_count,
             attempts, account, key_fp, issue, finish_reason, request_preview, reply_preview,
             error_preview, user_agent, raw_bytes, raw_truncated,
-            first_data_ms, reasoning_tokens, chunks, frames, thinking_level
+            first_data_ms, chunks, frames, thinking_level
           ) VALUES (
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?,
-            ?, ?, ?, ?, ?
+            ?, ?, ?, ?
           )
         `);
         const info = metaStmt.run(
@@ -332,7 +317,6 @@ export class AuditStore {
           rawBytes,
           rawTruncated,
           Math.max(0, Math.floor(Number(entry.firstDataMs || 0))),
-          reasoningTokens,
           Math.max(0, Math.floor(Number(entry.chunks || 0))),
           Math.max(0, Math.floor(Number(entry.frames || 0))),
           thinkingLevel,
@@ -341,12 +325,12 @@ export class AuditStore {
         this.db.prepare(`
           INSERT INTO audit_body (
             id, request_body, reply, tool_calls, error, params, req_headers,
-            reasoning, res_headers, rendered_prompt, annotations, quota_snapshot, failover_chain, native_evidence
+            res_headers, rendered_prompt, annotations, failover_chain, native_evidence
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           id, reqCap.text, replyCap.text, toolsCap.text, errCap.text, paramsJson, headersJson,
-          reasoningCap.text, resHeadersCap.text, renderedPromptCap.text, annotationsCap.text, quotaSnapshotCap.text, failoverChainCap.text, nativeEvidenceCap.text,
+          resHeadersCap.text, renderedPromptCap.text, annotationsCap.text, failoverChainCap.text, nativeEvidenceCap.text,
         );
         this.db.exec("COMMIT");
         return id;

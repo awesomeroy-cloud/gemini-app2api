@@ -65,7 +65,6 @@ function frameInfo(bytes) {
   }
   info.text = null;
   info.responseId = null;
-  info.thoughtsText = null;
   const model = one(fields, 1);
   if (model) {
     const modelFields = parse(model.payload);
@@ -79,49 +78,6 @@ function frameInfo(bytes) {
       const text = one(parse(display.payload), 1);
       if (text) info.text = utf8.decode(text.payload);
     }
-    try {
-      const thoughts = one(modelFields, 12);
-      if (thoughts && thoughts.wire === 2 && thoughts.payload.length > 0) {
-        const tf = parse(thoughts.payload);
-        const parts = [];
-        for (const f of tf) {
-          if (f.wire !== 2 || !f.payload.length) continue;
-          if (f.number === 1) {
-            try {
-              const s = utf8.decode(f.payload);
-              if (s) parts.push(s);
-            } catch {}
-          } else if (f.number === 3) {
-            let extracted = false;
-            try {
-              const sub = parse(f.payload);
-              if (sub.length > 0 && sub.every(sf => sf.number >= 1 && sf.number <= 64)) {
-                const subParts = [];
-                for (const sf of sub) {
-                  if (sf.wire === 2 && sf.payload.length > 0) {
-                    try {
-                      const s = utf8.decode(sf.payload);
-                      if (s && !/[\x00-\x08\x0e-\x1f]/.test(s)) subParts.push(s);
-                    } catch {}
-                  }
-                }
-                if (subParts.length > 0) {
-                  parts.push(subParts.join('\n'));
-                  extracted = true;
-                }
-              }
-            } catch {}
-            if (!extracted) {
-              try {
-                const s = utf8.decode(f.payload);
-                if (s && !/[\x00-\x08\x0e-\x1f]/.test(s)) parts.push(s);
-              } catch {}
-            }
-          }
-        }
-        if (parts.length > 0) info.thoughtsText = parts.join('\n');
-      }
-    } catch { /* Never throw on malformed thought subfields. */ }
   }
   info.outputShape = inspectNativeOutput(fields);
   info.quotaObservation = decodePassiveQuota(client.payload);
@@ -325,7 +281,7 @@ export class NativeDirectProvider {
     const bounded = promise => Promise.race([promise, deadline]);
     const requiresHydrogen = body.model === 'gemini-hydrogen';
     const requiresNeon = body.model === 'gemini-neon';
-    let rawText = '', observedThoughts = '', frames = 0, received = 0, observedMode = null, observedThinking = null;
+    let rawText = '', frames = 0, received = 0, observedMode = null, observedThinking = null;
     let modelComplete = false, ended = false, grpc = null, httpStatus = null, downgrade = false, phase = 'auth';
     let observedFallback = null, downgradeReason = null, observedAttribution = null;
     const attributionMatches = value => (!requiresHydrogen || HYDROGEN_ATTRIBUTION.test(value ?? '')) && (!requiresNeon || NEON_ATTRIBUTION.test(value ?? ''));
@@ -494,7 +450,6 @@ export class NativeDirectProvider {
             if (info.outputShape.nativeCompletenessState !== undefined) outputShape.nativeCompletenessState = info.outputShape.nativeCompletenessState;
           }
           if (!info) continue;
-          if (typeof info.thoughtsText === 'string' && info.thoughtsText.length > 0) observedThoughts = info.thoughtsText;
           observedFallback = info.fallback ?? observedFallback;
           downgradeReason = info.downgradeReason ?? downgradeReason;
           const frameMode = info.resolvedModeCategory;
@@ -644,7 +599,7 @@ export class NativeDirectProvider {
       if (body.response_format && !calls.length) {
         content = validateStructuredOutputText(content, body.response_format);
       }
-      const result = { ...identity, resolvedModeCategory: observedMode, ...(observedAttribution !== null ? { attribution: observedAttribution } : {}), content, calls, frames, thinkingLevel: observedThinking, continued: false, thoughts: observedThoughts, renderedPrompt: messages[0]?.content ?? '' };
+      const result = { ...identity, resolvedModeCategory: observedMode, ...(observedAttribution !== null ? { attribution: observedAttribution } : {}), content, calls, frames, thinkingLevel: observedThinking, continued: false, renderedPrompt: messages[0]?.content ?? '' };
       const effort = body.reasoning_effort ?? body.reasoning?.effort;
       if (effort !== undefined) result.requestedReasoningEffort = effort;
       result.ignoredTokenParameters = ['max_tokens', 'max_completion_tokens'].filter(key => body[key] !== undefined);
@@ -696,10 +651,9 @@ export class NativeDirectProvider {
         ...(outputFailureReason ? { outputFailureReason, outputFailureSource: 'exact_text_signature', outputToolCalls: 0 } : {}),
         ...(emptyResponseReason ? { emptyResponseReason } : {}),
       });
-      if (observedThoughts) safe.thoughts = observedThoughts;
       if (messages[0]?.content) safe.renderedPrompt = messages[0].content;
       if (incremental && modeVerified && (publishedContent.length || publishedCalls)) safe.partialResult = { ...identity, content: publishedContent, calls: liveCalls.slice(0, publishedCalls),
-        frames, thinkingLevel: observedThinking, resolvedModeCategory: observedMode, ...(observedAttribution !== null ? { attribution: observedAttribution } : {}), thoughts: observedThoughts, renderedPrompt: messages[0]?.content ?? '', nativeEvidence: safe.nativeEvidence };
+        frames, thinkingLevel: observedThinking, resolvedModeCategory: observedMode, ...(observedAttribution !== null ? { attribution: observedAttribution } : {}), renderedPrompt: messages[0]?.content ?? '', nativeEvidence: safe.nativeEvidence };
       throw safe;
     }
     finally {

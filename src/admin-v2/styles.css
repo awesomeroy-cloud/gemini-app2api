@@ -2495,7 +2495,6 @@ dialog details > summary { cursor: pointer; min-height: 36px; display: list-item
 .chat-block--assistant { border-left-color: var(--teal); }
 .chat-block--user { border-left-color: var(--accent); }
 .chat-block--system { border-left-color: var(--amber); }
-.chat-block--thinking { border-left-color: var(--amber); }
 .chat-block--tool { border-left-color: var(--violet); }
 .chat-block__summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 11.5px; font-weight: 650; color: var(--muted); cursor: pointer; list-style: none; user-select: none; }
 .chat-block__summary::-webkit-details-marker { display: none; }
